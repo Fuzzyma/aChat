@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+ <script type="text/template" id="rosterView"> 
+<ul>
+<% _.each( models, function( buddy ){ %>
+ <li>
+  <%= buddy.get('name') + ' ( ' + buddy.get('jid') + ' ) '
+  %>
+ </li>
+<% }); %>
+</ul>
+ </script>
+ <script src="jquery.js"></script>
+ <script type="text/javascript" src="lib/lodash.min.js"></script>
+ <script type="text/javascript" src="lib/json2.js"></script>
+ <script type="text/javascript" src="lib/backbone-min.js"></script>
+ <script type="text/javascript" src="lib/strophe-1.0.1.min.js"></script>
+ <!--<script src="http://jashkenas.github.com/coffee-script/extras/coffee-script.js" type="text/javascript" charset="utf-8"></script>-->
+ <script type="text/javascript" src="coffee/chat.js"></script>
+</head>
+<body>
+
+</body>
+</html>
