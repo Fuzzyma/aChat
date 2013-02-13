@@ -31,6 +31,7 @@ class aChat extends Backbone.Model
         login:false
         debug:false
         chatstates:true
+        online:false
         
 
     afkTimer:null
@@ -57,6 +58,10 @@ class aChat extends Backbone.Model
             @con.connect(@.get('jid'),@.get('pw'),@onconnect)
             @debug("Connect to server with jid: #{@.get('jid')}, pw: #{@.get('pw')}");
         
+    disconnect: =>
+        @set 'online',false
+        @con.disconnect()
+        
     onconnect: (status, error) =>
         switch status
             when Strophe.Status.ERROR
@@ -80,7 +85,7 @@ class aChat extends Backbone.Model
             when Strophe.Status.ATTACHED, Strophe.Status.CONNECTED
                 @debug('Verbunden');
                 
-                
+                @set 'online', true
                 @con.addHandler ((msg) => @debug(msg); true)
                 
                 @con.addHandler _.bind(@handle.message.chat,@), null, 'message', 'chat'
@@ -94,13 +99,13 @@ class aChat extends Backbone.Model
                 @con.addHandler _.bind(@handle.iq.set,@), null, 'iq', 'set'
                 #@con.addHandler _.bind(@handle.iq.error,@), null, 'iq', 'error'# for now we will ignore iq-errors
                 
-                @con.addHandler _.bind(@handle.presence.unavailable,@), null, 'presence', 'unavailable'
-                @con.addHandler _.bind(@handle.presence.subscribe,@), null, 'presence', 'subscribe'
-                @con.addHandler _.bind(@handle.presence.subscribed,@), null, 'presence', 'subscribed'
-                @con.addHandler _.bind(@handle.presence.unsubscribe,@), null, 'presence', 'unsubscribe'
-                @con.addHandler _.bind(@handle.presence.unsubscribed,@), null, 'presence', 'unsubscribed'
-                @con.addHandler _.bind(@handle.presence.unsubscribed,@), null, 'presence', 'probe'
-        
+                #@con.addHandler _.bind(@handle.presence.unavailable,@), null, 'presence', 'unavailable'
+                #@con.addHandler _.bind(@handle.presence.subsciption,@), null, 'presence', 'subscribe'
+                #@con.addHandler _.bind(@handle.presence.subsciption,@), null, 'presence', 'subscribed'
+                #@con.addHandler _.bind(@handle.presence.subsciption,@), null, 'presence', 'unsubscribe'
+                #@con.addHandler _.bind(@handle.presence.subsciption,@), null, 'presence', 'unsubscribed'
+                
+                @con.addHandler _.bind(@handle.presence.subscription,@), null, 'presence'
                 @con.addHandler _.bind(@handle.presence.general,@), null, 'presence'
         
                 @debug 'Request Roster'
@@ -199,7 +204,7 @@ class aChat extends Backbone.Model
                 buddy.trigger 'chatstate', state.nodeName
                 true
         error: (msg) ->
-            @debug Strophe.xmlescape msg
+            @debug msg
             true
         iq:
             get: (msg) -> 
@@ -230,7 +235,6 @@ class aChat extends Backbone.Model
                         @sendResult msg
 
                 @debug 'roster push'
-                @debug msg
                 true
         presence:
             unavailable: (msg) ->
@@ -241,17 +245,16 @@ class aChat extends Backbone.Model
                     'status':Strophe.getText(msg.getElementsByTagName('status')[0]) || null
                 true
  
-            #Todo: !!If the contact isnt in the roster, show the presence in the chat window!!
-            subscribe: (msg) ->
-                #Todo: someone requests subscription. Ask the user to approve or denie!
+            subscription: (msg) ->
+                return true if not msg.getAttribute 'type'
+                jid = Strophe.getBareJidFromJid msg.getAttribute 'from'
+                @trigger msg.getAttribute('type'), jid
+                #subscribe    -> someone requests subscription
+                #subscribed   -> somebody subscribed
+                #unsubscribe  -> someone denies your subscription
+                #unsubscribed -> somebody denyed to subscribe
                 true
-            subscribed: (msg) ->
-                #Todo: somebody subscribed - maybe show an infading info
-                true
-            unsubscribe: (msg) -> true
-                #Todo: someone denies your subscription. Ask the user what to do (remove, too or request again?)
-            unsubscribed: (msg) -> true
-                #Todo: somebody denyed to subscribe - again an info
+
             general: (msg) ->
                 return true if msg.getAttribute('type')
                 buddy = @roster.where(jid:Strophe.getBareJidFromJid msg.getAttribute 'from')[0]
@@ -260,6 +263,7 @@ class aChat extends Backbone.Model
                     'show':Strophe.getText(msg.getElementsByTagName('show')[0]) || null  #can be away, chat, dnd or xa
                     'status':Strophe.getText(msg.getElementsByTagName('status')[0]) || null
                 true
+
     #initialize the strophe-debug, setting the console as debug-output
     initDebug: ->
         #Strophe.log = console.log #too much spam of no interest for now
@@ -270,13 +274,20 @@ class aChat extends Backbone.Model
 class Buddy extends Backbone.Model
     _.extend(Buddy, Backbone.Events)
     initialize: ->
-        @on 'message', (e) =>
-            console.log e # only log the message for now and resend to the sender
-                          # todo: ChatWindow-View
-            @send(e)
+        @on 'message', (msg) =>
+            console.log msg # only log the message for now and resend to the sender
+                            # todo: ChatWindow-View
+            if not @get 'view' 
+                @collection.main.views.push new ChatWindowView model:@
+                @set 'view',true
+            msgObj = @get 'msg'
+            msgObj[+new Date] = msg
+            @set 'msg', msgObj
+            @trigger 'change:msg', @
+            @set 'state', @get('state') | Buddy.state.UPDATE | Buddy.state.OPEN
             
         @on 'chatstate', (e) =>
-            @chatstates = true
+            @set('chatstates',e)
             console.log e # log the chatstate
         this
     
@@ -289,6 +300,21 @@ class Buddy extends Backbone.Model
         chatstates:false
         status:null
         show:null
+        msg:{}
+        state:0
+        view:false
+        
+    @state:
+        OPEN:     1<<0
+        MINIMIZED:1<<1
+        ACTIVE:   1<<2
+        UPDATE:   1<<3
+        ACTIVE:   1<<4
+        COMPOSING:1<<5
+        PAUSED:   1<<6
+        INACTIVE: 1<<7
+        GONE:     1<<8
+        
         
     send: (msg) =>
         XMLmsg = $msg
@@ -351,13 +377,14 @@ class Roster extends Backbone.Collection
         
 
 class RosterView extends Backbone.View
-    _.extend(Roster, Backbone.Events);
+    _.extend(RosterView, Backbone.Events);
     initialize: ->
-        #@$el = $('<div id="aChat">')
         @listenTo @collection,'add remove',@render
         @render() if @collection
         @
     
+    events:
+        'click .logout':'logout'
     
     render: =>
         @collection.main.debug 'render roster'
@@ -366,11 +393,18 @@ class RosterView extends Backbone.View
             new RosterBuddyView
                 model:buddy
                 el:$('<li>').appendTo(template)
+                
+        button = ($('<input type="button" value="Log Out" class="logout" />'))
+        template = template.add(button)
         this.$el.html( template ).appendTo($('body'))
         true
+        
+    logout: ->
+        @collection.main.disconnect()
+        
 
 class RosterBuddyView extends Backbone.View
-    _.extend(Roster, Backbone.Events);
+    _.extend(RosterBuddyView, Backbone.Events)
     initialize: ->
         @listenTo @model,'change',@render
         @render() if @model
@@ -381,9 +415,67 @@ class RosterBuddyView extends Backbone.View
         _.templateSettings.variable = 'a'
         #template = _.template( $("#rosterView").html(), @model )
         template = @model.get('jid') + ' ( ' + @model.get('name') + ') - ' + @model.get('show') + '/' + @model.get('status')
-        
-        
+
         this.$el.html( template )
         true
+        
+class aChatView extends Backbone.View
+    _.extend(aChatView, Backbone.Events)
+    initialize: ->
+        @listenTo @model, 'subscribe subscribed unsubscribe unsubscribed', @info
+        @$el = $('body')
+        @render()
+        
+    info: (jid) ->
+        @model.views.push new aChatInfoView
+        
+    @render: ->
+        this.$el.html($('<div id="aChat">'))
+        
+class ChatWindowView extends Backbone.View
+    _.extend(aChatView, Backbone.Events)
+    initialize: ->
+        @listenTo @model, 'change:state', @handleState
+        @listenTo @model, 'change:msg', @handleMessage
+        @class = '.ChatWindowView'
+        #@render()
+        
+    handleState: =>
+        state = @model.get 'state'
+        if not @checkstate Buddy.state.OPEN
+            @close()
+        if @checkstate Buddy.state.ACTIVE
+            @$el.addClass('active')
+        else
+            @$el.removeClass('active')
+        if @checkstate Buddy.state.UPDATE
+            @$el.addClass('update')
+        else
+            @$el.removeClass('update')
+        if @checkstate Buddy.state.OPEN && @checkstate Buddy.state.MINIMIZED
+            @minimize()
+    
+    render: =>
+        $template = $('<span>').append(@model.get('jid')).add($('<ul>'))
+
+        for date,msg of @model.get('msg')
+            (time = new Date()).setTime(date)
+            $template.filter('ul').append('<li>'+time.getMinutes()+':'+time.getSeconds()+' - '+msg+'</li>')
+        this.$el.html( $template ).appendTo('#aChat')
+        true
+    
+    checkstate: (state) =>
+        return (@model.get('state') | Buddy.state.OPEN is Buddy.state.OPEN)
+
+    close: =>
+        @$el.remove()
+        @model.collection.main.trigger 'removeView', @
+        
+    minimize: => true
+    
+    handleMessage: =>
+        @render()
+        true
+        
 $ ->
     a = new aChat jid:'admin@localhost', pw:'tree', login:true, debug:true, id:'aChat'

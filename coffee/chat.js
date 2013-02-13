@@ -5,7 +5,7 @@ The message stanza can contain a subject-tag. No idea, why a chat should have a 
 Thread-tags are for now not included, too. (http://tools.ietf.org/html/rfc6121#section-5.2.5)
 */
 
-var Buddy, Roster, RosterBuddyView, RosterView, aChat,
+var Buddy, ChatWindowView, Roster, RosterBuddyView, RosterView, aChat, aChatView,
   __bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
   __hasProp = {}.hasOwnProperty,
   __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
@@ -32,6 +32,8 @@ aChat = (function(_super) {
     this.initViews = __bind(this.initViews, this);
 
     this.onconnect = __bind(this.onconnect, this);
+
+    this.disconnect = __bind(this.disconnect, this);
 
     this.connect = __bind(this.connect, this);
     return aChat.__super__.constructor.apply(this, arguments);
@@ -62,7 +64,8 @@ aChat = (function(_super) {
     httpbind: 'http-bind/',
     login: false,
     debug: false,
-    chatstates: true
+    chatstates: true,
+    online: false
   };
 
   aChat.prototype.afkTimer = null;
@@ -92,6 +95,11 @@ aChat = (function(_super) {
       this.con.connect(this.get('jid'), this.get('pw'), this.onconnect);
       return this.debug("Connect to server with jid: " + (this.get('jid')) + ", pw: " + (this.get('pw')));
     }
+  };
+
+  aChat.prototype.disconnect = function() {
+    this.set('online', false);
+    return this.con.disconnect();
   };
 
   aChat.prototype.onconnect = function(status, error) {
@@ -124,6 +132,7 @@ aChat = (function(_super) {
       case Strophe.Status.ATTACHED:
       case Strophe.Status.CONNECTED:
         this.debug('Verbunden');
+        this.set('online', true);
         this.con.addHandler((function(msg) {
           _this.debug(msg);
           return true;
@@ -134,12 +143,7 @@ aChat = (function(_super) {
         this.con.addHandler(_.bind(this.handle.error, this), null, 'error');
         this.con.addHandler(_.bind(this.handle.iq.get, this), null, 'iq', 'get');
         this.con.addHandler(_.bind(this.handle.iq.set, this), null, 'iq', 'set');
-        this.con.addHandler(_.bind(this.handle.presence.unavailable, this), null, 'presence', 'unavailable');
-        this.con.addHandler(_.bind(this.handle.presence.subscribe, this), null, 'presence', 'subscribe');
-        this.con.addHandler(_.bind(this.handle.presence.subscribed, this), null, 'presence', 'subscribed');
-        this.con.addHandler(_.bind(this.handle.presence.unsubscribe, this), null, 'presence', 'unsubscribe');
-        this.con.addHandler(_.bind(this.handle.presence.unsubscribed, this), null, 'presence', 'unsubscribed');
-        this.con.addHandler(_.bind(this.handle.presence.unsubscribed, this), null, 'presence', 'probe');
+        this.con.addHandler(_.bind(this.handle.presence.subscription, this), null, 'presence');
         this.con.addHandler(_.bind(this.handle.presence.general, this), null, 'presence');
         this.debug('Request Roster');
         this.requestRoster();
@@ -260,7 +264,7 @@ aChat = (function(_super) {
       }
     },
     error: function(msg) {
-      this.debug(Strophe.xmlescape(msg));
+      this.debug(msg);
       return true;
     },
     iq: {
@@ -307,7 +311,6 @@ aChat = (function(_super) {
             this.sendResult(msg);
         }
         this.debug('roster push');
-        this.debug(msg);
         return true;
       }
     },
@@ -326,16 +329,13 @@ aChat = (function(_super) {
         });
         return true;
       },
-      subscribe: function(msg) {
-        return true;
-      },
-      subscribed: function(msg) {
-        return true;
-      },
-      unsubscribe: function(msg) {
-        return true;
-      },
-      unsubscribed: function(msg) {
+      subscription: function(msg) {
+        var jid;
+        if (!msg.getAttribute('type')) {
+          return true;
+        }
+        jid = Strophe.getBareJidFromJid(msg.getAttribute('from'));
+        this.trigger(msg.getAttribute('type'), jid);
         return true;
       },
       general: function(msg) {
@@ -381,12 +381,23 @@ Buddy = (function(_super) {
 
   Buddy.prototype.initialize = function() {
     var _this = this;
-    this.on('message', function(e) {
-      console.log(e);
-      return _this.send(e);
+    this.on('message', function(msg) {
+      var msgObj;
+      console.log(msg);
+      if (!_this.get('view')) {
+        _this.collection.main.views.push(new ChatWindowView({
+          model: _this
+        }));
+        _this.set('view', true);
+      }
+      msgObj = _this.get('msg');
+      msgObj[+(new Date)] = msg;
+      _this.set('msg', msgObj);
+      _this.trigger('change:msg', _this);
+      return _this.set('state', _this.get('state') | Buddy.state.UPDATE | Buddy.state.OPEN);
     });
     this.on('chatstate', function(e) {
-      _this.chatstates = true;
+      _this.set('chatstates', e);
       return console.log(e);
     });
     return this;
@@ -400,7 +411,22 @@ Buddy = (function(_super) {
     groups: [],
     chatstates: false,
     status: null,
-    show: null
+    show: null,
+    msg: {},
+    state: 0,
+    view: false
+  };
+
+  Buddy.state = {
+    OPEN: 1 << 0,
+    MINIMIZED: 1 << 1,
+    ACTIVE: 1 << 2,
+    UPDATE: 1 << 3,
+    ACTIVE: 1 << 4,
+    COMPOSING: 1 << 5,
+    PAUSED: 1 << 6,
+    INACTIVE: 1 << 7,
+    GONE: 1 << 8
   };
 
   Buddy.prototype.send = function(msg) {
@@ -503,7 +529,7 @@ RosterView = (function(_super) {
     return RosterView.__super__.constructor.apply(this, arguments);
   }
 
-  _.extend(Roster, Backbone.Events);
+  _.extend(RosterView, Backbone.Events);
 
   RosterView.prototype.initialize = function() {
     this.listenTo(this.collection, 'add remove', this.render);
@@ -513,8 +539,12 @@ RosterView = (function(_super) {
     return this;
   };
 
+  RosterView.prototype.events = {
+    'click .logout': 'logout'
+  };
+
   RosterView.prototype.render = function() {
-    var buddy, template, _i, _len, _ref;
+    var buddy, button, template, _i, _len, _ref;
     this.collection.main.debug('render roster');
     template = $('<ul>');
     _ref = this.collection.models;
@@ -525,8 +555,14 @@ RosterView = (function(_super) {
         el: $('<li>').appendTo(template)
       });
     }
+    button = $('<input type="button" value="Log Out" class="logout" />');
+    template = template.add(button);
     this.$el.html(template).appendTo($('body'));
     return true;
+  };
+
+  RosterView.prototype.logout = function() {
+    return this.collection.main.disconnect();
   };
 
   return RosterView;
@@ -542,7 +578,7 @@ RosterBuddyView = (function(_super) {
     return RosterBuddyView.__super__.constructor.apply(this, arguments);
   }
 
-  _.extend(Roster, Backbone.Events);
+  _.extend(RosterBuddyView, Backbone.Events);
 
   RosterBuddyView.prototype.initialize = function() {
     this.listenTo(this.model, 'change', this.render);
@@ -562,6 +598,117 @@ RosterBuddyView = (function(_super) {
   };
 
   return RosterBuddyView;
+
+})(Backbone.View);
+
+aChatView = (function(_super) {
+
+  __extends(aChatView, _super);
+
+  function aChatView() {
+    return aChatView.__super__.constructor.apply(this, arguments);
+  }
+
+  _.extend(aChatView, Backbone.Events);
+
+  aChatView.prototype.initialize = function() {
+    this.listenTo(this.model, 'subscribe subscribed unsubscribe unsubscribed', this.info);
+    this.$el = $('body');
+    return this.render();
+  };
+
+  aChatView.prototype.info = function(jid) {
+    return this.model.views.push(new aChatInfoView);
+  };
+
+  aChatView.render = function() {
+    return this.$el.html($('<div id="aChat">'));
+  };
+
+  return aChatView;
+
+})(Backbone.View);
+
+ChatWindowView = (function(_super) {
+
+  __extends(ChatWindowView, _super);
+
+  function ChatWindowView() {
+    this.handleMessage = __bind(this.handleMessage, this);
+
+    this.minimize = __bind(this.minimize, this);
+
+    this.close = __bind(this.close, this);
+
+    this.checkstate = __bind(this.checkstate, this);
+
+    this.render = __bind(this.render, this);
+
+    this.handleState = __bind(this.handleState, this);
+    return ChatWindowView.__super__.constructor.apply(this, arguments);
+  }
+
+  _.extend(aChatView, Backbone.Events);
+
+  ChatWindowView.prototype.initialize = function() {
+    this.listenTo(this.model, 'change:state', this.handleState);
+    this.listenTo(this.model, 'change:msg', this.handleMessage);
+    return this["class"] = '.ChatWindowView';
+  };
+
+  ChatWindowView.prototype.handleState = function() {
+    var state;
+    state = this.model.get('state');
+    if (!this.checkstate(Buddy.state.OPEN)) {
+      this.close();
+    }
+    if (this.checkstate(Buddy.state.ACTIVE)) {
+      this.$el.addClass('active');
+    } else {
+      this.$el.removeClass('active');
+    }
+    if (this.checkstate(Buddy.state.UPDATE)) {
+      this.$el.addClass('update');
+    } else {
+      this.$el.removeClass('update');
+    }
+    if (this.checkstate(Buddy.state.OPEN && this.checkstate(Buddy.state.MINIMIZED))) {
+      return this.minimize();
+    }
+  };
+
+  ChatWindowView.prototype.render = function() {
+    var $template, date, msg, time, _ref;
+    $template = $('<span>').append(this.model.get('jid')).add($('<ul>'));
+    _ref = this.model.get('msg');
+    for (date in _ref) {
+      msg = _ref[date];
+      (time = new Date()).setTime(date);
+      $template.filter('ul').append('<li>' + time.getMinutes() + ':' + time.getSeconds() + ' - ' + msg + '</li>');
+    }
+    this.$el.html($template).appendTo('#aChat');
+    return true;
+  };
+
+  ChatWindowView.prototype.checkstate = function(state) {
+    return this.model.get('state') | Buddy.state.OPEN === Buddy.state.OPEN;
+  };
+
+  ChatWindowView.prototype.close = function() {
+    this.$el.remove();
+    return this.model.collection.main.trigger('removeView', this);
+  };
+
+  ChatWindowView.prototype.minimize = function() {
+    return true;
+  };
+
+  ChatWindowView.prototype.handleMessage = function() {
+    this.render();
+    return true;
+  };
+
+  return ChatWindowView;
 
 })(Backbone.View);
 
