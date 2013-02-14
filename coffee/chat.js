@@ -5,7 +5,7 @@ The message stanza can contain a subject-tag. No idea, why a chat should have a 
 Thread-tags are for now not included, too. (http://tools.ietf.org/html/rfc6121#section-5.2.5)
 */
 
-var Buddy, ChatWindowView, Roster, RosterBuddyView, RosterView, aChat, aChatView,
+var Buddy, ChatWindowView, MessageView, Roster, RosterBuddyView, RosterView, StateView, aChat, aChatView,
   __bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
   __hasProp = {}.hasOwnProperty,
   __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
@@ -47,7 +47,7 @@ aChat = (function(_super) {
     if (this.get('login')) {
       this.connect();
     }
-    if (this.get('login')) {
+    if (this.get('debug')) {
       this.initDebug();
     }
     this.initViews();
@@ -68,22 +68,22 @@ aChat = (function(_super) {
     online: false
   };
 
-  aChat.prototype.afkTimer = null;
-
-  aChat.prototype.status = 'active';
-
   aChat.prototype.con = null;
 
   aChat.prototype.roster = null;
 
   aChat.prototype.views = [];
 
-  aChat.constants = {
-    ACTIVE: 0,
-    COMPOSING: 1,
-    PAUSED: 2,
-    INACTIVE: 3,
-    GONE: 4
+  aChat.state = {
+    OPEN: 1 << 0,
+    MINIMIZED: 1 << 1,
+    CURRENT: 1 << 2,
+    UPDATE: 1 << 3,
+    ACTIVE: 1 << 4,
+    COMPOSING: 1 << 5,
+    PAUSED: 1 << 6,
+    INACTIVE: 1 << 7,
+    GONE: 1 << 8
   };
 
   aChat.prototype.connect = function() {
@@ -99,7 +99,9 @@ aChat = (function(_super) {
 
   aChat.prototype.disconnect = function() {
     this.set('online', false);
-    return this.con.disconnect();
+    this.con.disconnect('offline');
+    this.con.reset();
+    return this;
   };
 
   aChat.prototype.onconnect = function(status, error) {
@@ -143,6 +145,7 @@ aChat = (function(_super) {
         this.con.addHandler(_.bind(this.handle.error, this), null, 'error');
         this.con.addHandler(_.bind(this.handle.iq.get, this), null, 'iq', 'get');
         this.con.addHandler(_.bind(this.handle.iq.set, this), null, 'iq', 'set');
+        this.con.addHandler(_.bind(this.handle.presence.unavailable, this), null, 'presence', 'unavailable');
         this.con.addHandler(_.bind(this.handle.presence.subscription, this), null, 'presence');
         this.con.addHandler(_.bind(this.handle.presence.general, this), null, 'presence');
         this.debug('Request Roster');
@@ -325,7 +328,8 @@ aChat = (function(_super) {
         }
         buddy.set({
           'online': false,
-          'status': Strophe.getText(msg.getElementsByTagName('status')[0]) || null
+          'status': Strophe.getText(msg.getElementsByTagName('status')[0]) || null,
+          'show': null
         });
         return true;
       },
@@ -361,7 +365,9 @@ aChat = (function(_super) {
   aChat.prototype.initDebug = function() {};
 
   aChat.prototype.debug = function(msg) {
-    return console.log(msg);
+    if (this.get('debug')) {
+      return console.log(msg);
+    }
   };
 
   return aChat;
@@ -373,7 +379,13 @@ Buddy = (function(_super) {
   __extends(Buddy, _super);
 
   function Buddy() {
+    this.changeChatstate = __bind(this.changeChatstate, this);
+
+    this.checkstate = __bind(this.checkstate, this);
+
     this.send = __bind(this.send, this);
+
+    this.initView = __bind(this.initView, this);
     return Buddy.__super__.constructor.apply(this, arguments);
   }
 
@@ -383,24 +395,39 @@ Buddy = (function(_super) {
     var _this = this;
     this.on('message', function(msg) {
       var msgObj;
+      _this.initView();
       console.log(msg);
-      if (!_this.get('view')) {
-        _this.collection.main.views.push(new ChatWindowView({
-          model: _this
-        }));
-        _this.set('view', true);
-      }
       msgObj = _this.get('msg');
       msgObj[+(new Date)] = msg;
       _this.set('msg', msgObj);
       _this.trigger('change:msg', _this);
-      return _this.set('state', _this.get('state') | Buddy.state.UPDATE | Buddy.state.OPEN);
+      return _this.set('state', _this.get('state') | aChat.state.UPDATE);
     });
-    this.on('chatstate', function(e) {
-      _this.set('chatstates', e);
-      return console.log(e);
+    this.on('chatstate', function(state) {
+      _this.set('state', _this.get('state') & ~(aChat.state.ACTIVE | aChat.state.COMPOSING | aChat.state.PAUSED | aChat.state.INACTIVE | aChat.state.GONE) | aChat.state[state.toUpperCase()]);
+      return console.log(state);
     });
+    this.on('change:state', function() {
+      var d, i, text, _ref;
+      text = '';
+      _ref = aChat.state;
+      for (i in _ref) {
+        d = _ref[i];
+        text += i + ': ' + _this.checkstate(d) + '<br />';
+      }
+      return $('#flags').html(text);
+    });
+    this.trigger('change:state', this);
     return this;
+  };
+
+  Buddy.prototype.initView = function() {
+    if (!this.get('view')) {
+      this.collection.main.views.push(new ChatWindowView({
+        model: this
+      }));
+      return this.set('state', this.get('state') | aChat.state.OPEN);
+    }
   };
 
   Buddy.prototype.defaults = {
@@ -414,35 +441,79 @@ Buddy = (function(_super) {
     show: null,
     msg: {},
     state: 0,
-    view: false
+    view: false,
+    currentChatState: aChat.state.ACTIVE
   };
 
-  Buddy.state = {
-    OPEN: 1 << 0,
-    MINIMIZED: 1 << 1,
-    ACTIVE: 1 << 2,
-    UPDATE: 1 << 3,
-    ACTIVE: 1 << 4,
-    COMPOSING: 1 << 5,
-    PAUSED: 1 << 6,
-    INACTIVE: 1 << 7,
-    GONE: 1 << 8
-  };
+  Buddy.prototype.chatStateTimer = null;
 
-  Buddy.prototype.send = function(msg) {
-    var XMLmsg;
+  Buddy.prototype.send = function(msg, chatstate) {
+    var XMLmsg, n, state, _ref;
+    if (msg == null) {
+      msg = '';
+    }
+    if (chatstate == null) {
+      chatstate = aChat.state.ACTIVE;
+    }
+    if (!this.collection.main.get('online')) {
+      return;
+    }
     XMLmsg = $msg({
       from: this.collection.main.get('jid'),
       to: this.get('jid'),
       type: 'chat'
     }).c('body').t(msg).up();
-    if (this.chatstates && this.collection.main.get('chatstates')) {
-      XMLmsg.c('active', {
-        xmlns: Strophe.NS.CHATSTATES
-      });
+    _ref = aChat.state;
+    for (state in _ref) {
+      n = _ref[state];
+      if (n === chatstate) {
+        break;
+      }
     }
+    XMLmsg.c(state.toLowerCase(), {
+      xmlns: Strophe.NS.CHATSTATES
+    });
     this.collection.main.con.send(XMLmsg);
     return true;
+  };
+
+  Buddy.prototype.checkstate = function(state) {
+    return (this.get('state') & state) === state;
+  };
+
+  Buddy.prototype.changeChatstate = function(state) {
+    var futureState, timeoutTime,
+      _this = this;
+    if (state !== this.currentChatState) {
+      this.send(null, state);
+      this.currentChatState = state;
+    }
+    if (this.chatStateTimer) {
+      clearTimeout(this.chatStateTimer);
+    }
+    switch (state) {
+      case aChat.state.ACTIVE:
+        futureState = aChat.state.INACTIVE;
+        timeoutTime = 120000;
+        break;
+      case aChat.state.INACTIVE:
+        futureState = aChat.state.GONE;
+        timeoutTime = 600000;
+        break;
+      case aChat.state.GONE:
+        return;
+      case aChat.state.COMPOSING:
+        futureState = aChat.state.PAUSED;
+        timeoutTime = 1000;
+        break;
+      case aChat.state.PAUSED:
+        futureState = aChat.state.INACTIVE;
+        timeoutTime = 120000;
+    }
+    this.chatStateTimer = setTimeout((function() {
+      return _this.changeChatstate(futureState);
+    }), timeoutTime);
+    return this;
   };
 
   return Buddy;
@@ -513,7 +584,7 @@ Roster = (function(_super) {
     this.main.debug('Remove-Buddy - Request');
     this.collection.main.con.send(iq);
     buddy = null;
-    return true;
+    return this;
   };
 
   return Roster;
@@ -546,7 +617,7 @@ RosterView = (function(_super) {
   RosterView.prototype.render = function() {
     var buddy, button, template, _i, _len, _ref;
     this.collection.main.debug('render roster');
-    template = $('<ul>');
+    template = $('<ul id="aChat_roster">');
     _ref = this.collection.models;
     for (_i = 0, _len = _ref.length; _i < _len; _i++) {
       buddy = _ref[_i];
@@ -588,13 +659,21 @@ RosterBuddyView = (function(_super) {
     return this;
   };
 
+  RosterBuddyView.prototype.events = {
+    'click': 'onClickBuddy'
+  };
+
   RosterBuddyView.prototype.render = function() {
     var template;
-    this.model.collection.main.debug('render BuddyView');
+    this.model.collection.main.debug('render RosterBuddyView');
     _.templateSettings.variable = 'a';
     template = this.model.get('jid') + ' ( ' + this.model.get('name') + ') - ' + this.model.get('show') + '/' + this.model.get('status');
     this.$el.html(template);
     return true;
+  };
+
+  RosterBuddyView.prototype.onClickBuddy = function() {
+    return this.model.initView();
   };
 
   return RosterBuddyView;
@@ -622,6 +701,7 @@ aChatView = (function(_super) {
   };
 
   aChatView.render = function() {
+    this.model.debug('render aChatView');
     return this.$el.html($('<div id="aChat">'));
   };
 
@@ -634,13 +714,9 @@ ChatWindowView = (function(_super) {
   __extends(ChatWindowView, _super);
 
   function ChatWindowView() {
-    this.handleMessage = __bind(this.handleMessage, this);
-
     this.minimize = __bind(this.minimize, this);
 
     this.close = __bind(this.close, this);
-
-    this.checkstate = __bind(this.checkstate, this);
 
     this.render = __bind(this.render, this);
 
@@ -648,54 +724,65 @@ ChatWindowView = (function(_super) {
     return ChatWindowView.__super__.constructor.apply(this, arguments);
   }
 
-  _.extend(aChatView, Backbone.Events);
+  _.extend(ChatWindowView, Backbone.Events);
 
   ChatWindowView.prototype.initialize = function() {
     this.listenTo(this.model, 'change:state', this.handleState);
-    this.listenTo(this.model, 'change:msg', this.handleMessage);
-    return this["class"] = '.ChatWindowView';
+    this["class"] = '.ChatWindowView';
+    return this.render();
+  };
+
+  ChatWindowView.prototype.events = {
+    'keydown .ChatWindowView_msg>textarea': 'onKeyDownMsg'
   };
 
   ChatWindowView.prototype.handleState = function() {
     var state;
     state = this.model.get('state');
-    if (!this.checkstate(Buddy.state.OPEN)) {
+    if (!this.model.checkstate(aChat.state.OPEN)) {
       this.close();
     }
-    if (this.checkstate(Buddy.state.ACTIVE)) {
+    if (this.model.checkstate(aChat.state.CURRENT)) {
       this.$el.addClass('active');
     } else {
       this.$el.removeClass('active');
     }
-    if (this.checkstate(Buddy.state.UPDATE)) {
+    if (this.model.checkstate(aChat.state.UPDATE)) {
       this.$el.addClass('update');
     } else {
       this.$el.removeClass('update');
     }
-    if (this.checkstate(Buddy.state.OPEN && this.checkstate(Buddy.state.MINIMIZED))) {
+    if (this.model.checkstate(aChat.state.OPEN && this.model.checkstate(aChat.state.MINIMIZED))) {
       return this.minimize();
     }
   };
 
   ChatWindowView.prototype.render = function() {
-    var $template, date, msg, time, _ref;
-    $template = $('<span>').append(this.model.get('jid')).add($('<ul>'));
-    _ref = this.model.get('msg');
-    for (date in _ref) {
-      msg = _ref[date];
-      (time = new Date()).setTime(date);
-      $template.filter('ul').append('<li>' + time.getMinutes() + ':' + time.getSeconds() + ' - ' + msg + '</li>');
+    var $template;
+    this.model.collection.main.debug('render ChatWindowView');
+    _.templateSettings.variable = "a";
+    $template = $(_.template($.trim($("#ChatWindowView").html()), {
+      jid: this.model.get('jid')
+    }));
+    new MessageView({
+      el: $template.filter('.ChatWindowView_chat'),
+      model: this.model
+    });
+    new StateView({
+      el: $template.filter('.ChatWindowView_state'),
+      model: this.model
+    });
+    this.$el.html($template);
+    if (!this.model.get('view')) {
+      this.$el.appendTo('#aChat');
+      this.model.set('view', true);
     }
-    this.$el.html($template).appendTo('#aChat');
     return true;
-  };
-
-  ChatWindowView.prototype.checkstate = function(state) {
-    return this.model.get('state') | Buddy.state.OPEN === Buddy.state.OPEN;
   };
 
   ChatWindowView.prototype.close = function() {
     this.$el.remove();
+    this.model.set('view', false);
     return this.model.collection.main.trigger('removeView', this);
   };
 
@@ -703,12 +790,91 @@ ChatWindowView = (function(_super) {
     return true;
   };
 
-  ChatWindowView.prototype.handleMessage = function() {
-    this.render();
-    return true;
+  ChatWindowView.prototype.onClickMinimize = function() {
+    return this.model.set('state', this.get('state') | aChat.state.MINIMIZED & ~aChat.state.CURRENT);
+  };
+
+  ChatWindowView.prototype.onClickClose = function() {
+    return this.model.set('state', 0);
+  };
+
+  ChatWindowView.prototype.onKeyDownMsg = function(e) {
+    this.model.changeChatstate(aChat.state.COMPOSING);
+    if (e.keyCode === 13) {
+      this.model.send(e.target.value);
+      e.target.value = '';
+      return false;
+    }
   };
 
   return ChatWindowView;
+
+})(Backbone.View);
+
+MessageView = (function(_super) {
+
+  __extends(MessageView, _super);
+
+  function MessageView() {
+    this.render = __bind(this.render, this);
+    return MessageView.__super__.constructor.apply(this, arguments);
+  }
+
+  _.extend(MessageView, Backbone.Events);
+
+  MessageView.prototype.initialize = function() {
+    this.listenTo(this.model, 'change:msg', this.render);
+    return this;
+  };
+
+  MessageView.prototype.render = function() {
+    var $template;
+    this.model.collection.main.debug('render MessageView');
+    _.templateSettings.variable = "a";
+    $template = _.template($("#ChatWindowView_chat").html(), this.model.get('msg'));
+    this.$el.html($template);
+    return true;
+  };
+
+  return MessageView;
+
+})(Backbone.View);
+
+StateView = (function(_super) {
+
+  __extends(StateView, _super);
+
+  function StateView() {
+    this.render = __bind(this.render, this);
+    return StateView.__super__.constructor.apply(this, arguments);
+  }
+
+  _.extend(StateView, Backbone.Events);
+
+  StateView.prototype.initialize = function() {
+    return this.listenTo(this.model, 'change:state', this.render);
+  };
+
+  StateView.prototype.render = function() {
+    var text;
+    this.model.collection.main.debug('render StateView');
+    text = '';
+    if (this.model.checkstate(aChat.state.COMPOSING)) {
+      text = 'composing';
+    }
+    if (this.model.checkstate(aChat.state.PAUSED)) {
+      text = 'paused';
+    }
+    if (this.model.checkstate(aChat.state.INACTIVE)) {
+      text = 'inactive';
+    }
+    if (this.model.checkstate(aChat.state.GONE)) {
+      text = 'gone';
+    }
+    return this.$el.html(text);
+  };
+
+  return StateView;
 
 })(Backbone.View);
 

@@ -1,15 +1,24 @@
 <!DOCTYPE html>
 <html>
 <head>
- <script type="text/template" id="rosterView"> 
-<ul>
-<% _.each( models, function( buddy ){ %>
- <li>
-  <%= buddy.get('name') + ' ( ' + buddy.get('jid') + ' ) '
-  %>
- </li>
-<% }); %>
+ <script type="text/template" id="ChatWindowView">
+
+<div class="ChatWindowView_header">
+ <span class="ChatWindowView_name"><%= a.jid %></span>
+</div>
+<ul class="ChatWindowView_chat">
+
 </ul>
+<div class="ChatWindowView_state"></div>
+<div class="ChatWindowView_msg">
+ <textarea cols="30" rows="5"></textarea>
+</div>
+
+ </script>
+ <script type="text/template" id="ChatWindowView_chat">
+<% _.each(a, function(m,d) { (time = new Date()).setTime(d); %> 
+ <li><span class="date"><%= time.getHours() %>:<%= time.getMinutes() %></span> - <span><%- m %></span></li> 
+<% }); %>
  </script>
  <script type="text/javascript" src="lib/jquery-1.9.1.min.js"></script>
  <script type="text/javascript" src="lib/lodash.min.js"></script>
@@ -20,6 +29,6 @@
  <script type="text/javascript" src="coffee/chat.js"></script>
 </head>
 <body>
-
+<div id="flags"></div>
 </body>
 </html>

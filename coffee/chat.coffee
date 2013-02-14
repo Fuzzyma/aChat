@@ -16,7 +16,7 @@ class aChat extends Backbone.Model
         @roster = new Roster null, @
         Strophe.addNamespace 'CHATSTATES', 'http://jabber.org/protocol/chatstates'
         @connect() if @.get('login')
-        @initDebug() if @.get('login')
+        @initDebug() if @.get('debug')
         @initViews()
         this
 
@@ -33,20 +33,20 @@ class aChat extends Backbone.Model
         chatstates:true
         online:false
         
-
-    afkTimer:null
-    status: 'active'
     con:null
     roster:null
     views:[]
     
-    
-    @constants:
-        ACTIVE:0
-        COMPOSING:1
-        PAUSED:2
-        INACTIVE:3
-        GONE:4
+    @state:
+        OPEN:     1<<0
+        MINIMIZED:1<<1
+        CURRENT:  1<<2
+        UPDATE:   1<<3
+        ACTIVE:   1<<4
+        COMPOSING:1<<5
+        PAUSED:   1<<6
+        INACTIVE: 1<<7
+        GONE:     1<<8
     
     #connects or attachs to the server
     connect: =>
@@ -60,7 +60,12 @@ class aChat extends Backbone.Model
         
     disconnect: =>
         @set 'online',false
-        @con.disconnect()
+        #@con.send $pres
+        #    type:'unavailable'
+        #    from:@get 'jid'    # Strophe doesnt send unavailable presence in tests. But doing it manually breaks the lib
+        @con.disconnect('offline')
+        @con.reset()
+        @
         
     onconnect: (status, error) =>
         switch status
@@ -99,7 +104,7 @@ class aChat extends Backbone.Model
                 @con.addHandler _.bind(@handle.iq.set,@), null, 'iq', 'set'
                 #@con.addHandler _.bind(@handle.iq.error,@), null, 'iq', 'error'# for now we will ignore iq-errors
                 
-                #@con.addHandler _.bind(@handle.presence.unavailable,@), null, 'presence', 'unavailable'
+                @con.addHandler _.bind(@handle.presence.unavailable,@), null, 'presence', 'unavailable'
                 #@con.addHandler _.bind(@handle.presence.subsciption,@), null, 'presence', 'subscribe'
                 #@con.addHandler _.bind(@handle.presence.subsciption,@), null, 'presence', 'subscribed'
                 #@con.addHandler _.bind(@handle.presence.subsciption,@), null, 'presence', 'unsubscribe'
@@ -243,6 +248,7 @@ class aChat extends Backbone.Model
                 buddy.set
                     'online':false
                     'status':Strophe.getText(msg.getElementsByTagName('status')[0]) || null
+                    'show':null
                 true
  
             subscription: (msg) ->
@@ -269,27 +275,41 @@ class aChat extends Backbone.Model
         #Strophe.log = console.log #too much spam of no interest for now
     
     #class-intern debug-function using the console
-    debug: (msg) -> console.log(msg)
+    debug: (msg) -> console.log(msg) if @get 'debug'
     
 class Buddy extends Backbone.Model
     _.extend(Buddy, Backbone.Events)
     initialize: ->
         @on 'message', (msg) =>
-            console.log msg # only log the message for now and resend to the sender
-                            # todo: ChatWindow-View
-            if not @get 'view' 
-                @collection.main.views.push new ChatWindowView model:@
-                @set 'view',true
+            @initView()
+            console.log msg
             msgObj = @get 'msg'
             msgObj[+new Date] = msg
             @set 'msg', msgObj
             @trigger 'change:msg', @
-            @set 'state', @get('state') | Buddy.state.UPDATE | Buddy.state.OPEN
+            @set 'state', @get('state') | aChat.state.UPDATE
+                        
             
-        @on 'chatstate', (e) =>
-            @set('chatstates',e)
-            console.log e # log the chatstate
+        @on 'chatstate', (state) =>
+            @set 'state', @get('state') &~ (aChat.state.ACTIVE | aChat.state.COMPOSING | aChat.state.PAUSED | aChat.state.INACTIVE | aChat.state.GONE) | aChat.state[state.toUpperCase()]
+            console.log state # log the chatstate
+        
+        #Stuff for debugging
+        @on 'change:state', => 
+            text = ''
+            for i,d of aChat.state
+                text += i + ': ' + @checkstate(d) + '<br />'
+
+            $('#flags').html text
+            
+        @trigger 'change:state', @
         this
+        #end
+        
+    initView: =>
+        if not @get 'view' 
+            @collection.main.views.push new ChatWindowView model:@
+            @set 'state', @get('state') | aChat.state.OPEN
     
     defaults:
         jid:null
@@ -303,32 +323,59 @@ class Buddy extends Backbone.Model
         msg:{}
         state:0
         view:false
+        currentChatState:aChat.state.ACTIVE
         
-    @state:
-        OPEN:     1<<0
-        MINIMIZED:1<<1
-        ACTIVE:   1<<2
-        UPDATE:   1<<3
-        ACTIVE:   1<<4
-        COMPOSING:1<<5
-        PAUSED:   1<<6
-        INACTIVE: 1<<7
-        GONE:     1<<8
+    chatStateTimer:null
         
-        
-    send: (msg) =>
+    send: (msg = '', chatstate = aChat.state.ACTIVE) =>
+        return if not @collection.main.get 'online'
         XMLmsg = $msg
             from: @collection.main.get('jid')
             to: @get('jid')
             type: 'chat'
         .c('body').t(msg).up()
         
-        XMLmsg.c('active', {xmlns: Strophe.NS.CHATSTATES}) if @chatstates and @collection.main.get('chatstates')
+        for state,n of aChat.state
+            if n is chatstate
+                break
+        
+        XMLmsg.c(state.toLowerCase(), {xmlns: Strophe.NS.CHATSTATES})# if @chatstates and @collection.main.get('chatstates')
         
         @collection.main.con.send(XMLmsg);
         true
+
+    checkstate: (state) =>
+        #alert(@get('state').toString(2) + ' & ' + state.toString(2) + ' == ' + (@get('state') & state).toString(2) + ' (' + ((@get('state') & state) == state) + ')')
+        (@get('state') & state) is state
         
+    changeChatstate: (state) =>
         
+        if state isnt @currentChatState
+            @send null, state
+            @currentChatState = state
+        
+        clearTimeout(@chatStateTimer) if @chatStateTimer
+        
+        switch state
+            when aChat.state.ACTIVE
+                futureState = aChat.state.INACTIVE
+                timeoutTime = 120000
+            when aChat.state.INACTIVE
+                futureState = aChat.state.GONE
+                timeoutTime = 600000
+            when aChat.state.GONE
+                return
+            when aChat.state.COMPOSING
+                futureState = aChat.state.PAUSED
+                timeoutTime = 1000
+            when aChat.state.PAUSED
+                futureState = aChat.state.INACTIVE
+                timeoutTime = 120000
+                
+        @chatStateTimer = setTimeout (=> @changeChatstate(futureState)),timeoutTime
+        @
+        
+
 class Roster extends Backbone.Collection
     _.extend(Roster, Backbone.Events);
     model:Buddy
@@ -373,7 +420,7 @@ class Roster extends Backbone.Collection
         @main.debug 'Remove-Buddy - Request'
         @collection.main.con.send(iq);
         buddy = null
-        true
+        @
         
 
 class RosterView extends Backbone.View
@@ -388,7 +435,7 @@ class RosterView extends Backbone.View
     
     render: =>
         @collection.main.debug 'render roster'
-        template = $('<ul>');
+        template = $('<ul id="aChat_roster">');
         for buddy in @collection.models
             new RosterBuddyView
                 model:buddy
@@ -409,15 +456,21 @@ class RosterBuddyView extends Backbone.View
         @listenTo @model,'change',@render
         @render() if @model
         @
-    
+        
+    events:
+        'click':'onClickBuddy'
+        
     render: =>
-        @model.collection.main.debug 'render BuddyView'
+        @model.collection.main.debug 'render RosterBuddyView'
         _.templateSettings.variable = 'a'
         #template = _.template( $("#rosterView").html(), @model )
         template = @model.get('jid') + ' ( ' + @model.get('name') + ') - ' + @model.get('show') + '/' + @model.get('status')
-
         this.$el.html( template )
         true
+        
+    onClickBuddy: ->
+        @model.initView()
+        
         
 class aChatView extends Backbone.View
     _.extend(aChatView, Backbone.Events)
@@ -430,52 +483,105 @@ class aChatView extends Backbone.View
         @model.views.push new aChatInfoView
         
     @render: ->
+        @model.debug 'render aChatView'
         this.$el.html($('<div id="aChat">'))
         
 class ChatWindowView extends Backbone.View
-    _.extend(aChatView, Backbone.Events)
+    _.extend(ChatWindowView, Backbone.Events)
     initialize: ->
         @listenTo @model, 'change:state', @handleState
-        @listenTo @model, 'change:msg', @handleMessage
         @class = '.ChatWindowView'
-        #@render()
+        @render()
+        
+        
+    events:
+        'keydown .ChatWindowView_msg>textarea':'onKeyDownMsg'
         
     handleState: =>
         state = @model.get 'state'
-        if not @checkstate Buddy.state.OPEN
+        if not @model.checkstate aChat.state.OPEN
             @close()
-        if @checkstate Buddy.state.ACTIVE
+        if @model.checkstate aChat.state.CURRENT
             @$el.addClass('active')
         else
             @$el.removeClass('active')
-        if @checkstate Buddy.state.UPDATE
+        if @model.checkstate aChat.state.UPDATE
             @$el.addClass('update')
         else
             @$el.removeClass('update')
-        if @checkstate Buddy.state.OPEN && @checkstate Buddy.state.MINIMIZED
+        if @model.checkstate aChat.state.OPEN && @model.checkstate aChat.state.MINIMIZED
             @minimize()
     
     render: =>
-        $template = $('<span>').append(@model.get('jid')).add($('<ul>'))
-
-        for date,msg of @model.get('msg')
-            (time = new Date()).setTime(date)
-            $template.filter('ul').append('<li>'+time.getMinutes()+':'+time.getSeconds()+' - '+msg+'</li>')
-        this.$el.html( $template ).appendTo('#aChat')
+        @model.collection.main.debug 'render ChatWindowView'
+        _.templateSettings.variable = "a"
+        $template = $(_.template( $.trim($("#ChatWindowView").html()), jid:@model.get('jid') ))
+        new MessageView el: $template.filter('.ChatWindowView_chat'), model:@model
+        new StateView el: $template.filter('.ChatWindowView_state'), model:@model
+        this.$el.html( $template )
+        if not @model.get 'view'
+            this.$el.appendTo('#aChat')
+            @model.set 'view',true
         true
-    
-    checkstate: (state) =>
-        return (@model.get('state') | Buddy.state.OPEN is Buddy.state.OPEN)
 
     close: =>
         @$el.remove()
+        @model.set 'view',false
         @model.collection.main.trigger 'removeView', @
         
     minimize: => true
-    
-    handleMessage: =>
-        @render()
+        
+    onClickMinimize: ->
+        @model.set 'state', @get('state') | aChat.state.MINIMIZED &~ aChat.state.CURRENT
+        
+    onClickClose: ->
+        @model.set 'state', 0
+        
+    onKeyDownMsg: (e) ->
+        @model.changeChatstate(aChat.state.COMPOSING)
+        if(e.keyCode == 13)
+            @model.send(e.target.value)
+            e.target.value = ''
+            false
+        
+class MessageView extends Backbone.View
+    _.extend(MessageView, Backbone.Events)
+    initialize: ->
+        @listenTo @model, 'change:msg', @render
+        @
+
+    render: =>
+        @model.collection.main.debug 'render MessageView'
+        _.templateSettings.variable = "a"
+        $template = _.template( $("#ChatWindowView_chat").html(), @model.get 'msg' )
+        @$el.html($template)
         true
         
+class StateView extends Backbone.View
+    _.extend(StateView, Backbone.Events)
+    initialize: ->
+        @listenTo @model, 'change:state', @render
+        
+    render: =>
+        @model.collection.main.debug 'render StateView'
+        text = ''
+        if(@model.checkstate aChat.state.COMPOSING)
+            text = 'composing'
+        if(@model.checkstate aChat.state.PAUSED)
+            text = 'paused'
+        if(@model.checkstate aChat.state.INACTIVE)
+            text = 'inactive'
+        if(@model.checkstate aChat.state.GONE)
+            text = 'gone'
+        @$el.html text
+            
+        
+        
 $ ->
-    a = new aChat jid:'admin@localhost', pw:'tree', login:true, debug:true, id:'aChat'
+    a = new aChat
+        jid:'admin@localhost'
+        pw:'tree'
+        login:true
+        debug:true
+        id:'aChat'
+        #httpbind:'http://bosh.metajack.im:5280/xmpp-httpbind' #use this to connect to a server of yours
