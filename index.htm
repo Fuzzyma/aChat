@@ -4,21 +4,37 @@
  <script type="text/template" id="ChatWindowView">
 
 <div class="ChatWindowView_header">
+ <a href="#" class="ChatWindowView_close">X</a>
  <span class="ChatWindowView_name"><%= a.jid %></span>
 </div>
 <ul class="ChatWindowView_chat">
 
 </ul>
 <div class="ChatWindowView_state"></div>
-<div class="ChatWindowView_msg">
- <textarea cols="30" rows="5"></textarea>
-</div>
+<textarea class="ChatWindowView_msg"></textarea>
 
  </script>
  <script type="text/template" id="ChatWindowView_chat">
 <% _.each(a, function(m,d) { (time = new Date()).setTime(d); %> 
  <li><span class="date"><%= time.getHours() %>:<%= time.getMinutes() %></span> - <span><%- m %></span></li> 
 <% }); %>
+ </script>
+ <script type="text/template" id="aChatView">
+  <div class="aChatView">
+   <select name="presenceStatus">
+    <option value="online">Online</option>
+    <option value="chat">Ready for Chat</option>
+    <option value="away">Away</option>
+    <option value="xa">Unavailable</option>
+    <option value="dnd">Busy</option>
+    <option value="offline" selected="selected">Offline</option>
+   </select>
+   <input type="text" name="presenceShow" placeholder="Write your status here" />
+   <ul class="RosterView"></ul>
+  </div>
+ </script>
+ <script type="text/template" id="RosterView">
+  <div class="RosterView"></div>
  </script>
  <script type="text/javascript" src="lib/jquery-1.9.1.min.js"></script>
  <script type="text/javascript" src="lib/lodash.min.js"></script>
@@ -27,6 +43,7 @@
  <script type="text/javascript" src="lib/strophe-1.0.1.min.js"></script>
  <!--<script src="http://jashkenas.github.com/coffee-script/extras/coffee-script.js" type="text/javascript" charset="utf-8"></script>-->
  <script type="text/javascript" src="coffee/chat.js"></script>
+ <link rel="stylesheet" href="css/aChat.css" />
 </head>
 <body>
 <div id="flags"></div>

@@ -54,7 +54,7 @@ aChat = (function(_super) {
     return this;
   };
 
-  aChat.VERSION = '08.02.2013';
+  aChat.VERSION = '15.02.2013';
 
   aChat.prototype.defaults = {
     jid: null,
@@ -65,7 +65,9 @@ aChat = (function(_super) {
     login: false,
     debug: false,
     chatstates: true,
-    online: false
+    online: false,
+    status: null,
+    show: null
   };
 
   aChat.prototype.con = null;
@@ -73,6 +75,8 @@ aChat = (function(_super) {
   aChat.prototype.roster = null;
 
   aChat.prototype.views = [];
+
+  aChat.prototype.loginTimeout = null;
 
   aChat.state = {
     OPEN: 1 << 0,
@@ -87,20 +91,29 @@ aChat = (function(_super) {
   };
 
   aChat.prototype.connect = function() {
+    if (this.get('online')) {
+      return this;
+    }
     this.con = new Strophe.Connection(this.get('httpbind'));
     if (this.get('jid') && this.get('sid') && this.get('rid')) {
       this.con.attach(this.get('jid'), this.get('sid'), this.get('rid'), this.onconnect);
-      return this.debug("Attach to session with jid: " + (this.get('jid')) + ", sid: " + (this.get('sid')) + ", rid: " + (this.get('rid')));
+      this.debug("Attach to session with jid: " + (this.get('jid')) + ", sid: " + (this.get('sid')) + ", rid: " + (this.get('rid')));
     } else if (this.get('jid') && this.get('pw')) {
       this.con.connect(this.get('jid'), this.get('pw'), this.onconnect);
-      return this.debug("Connect to server with jid: " + (this.get('jid')) + ", pw: " + (this.get('pw')));
+      this.debug("Connect to server with jid: " + (this.get('jid')) + ", pw: " + (this.get('pw')));
     }
+    return this;
   };
 
   aChat.prototype.disconnect = function() {
+    if (!this.get('online')) {
+      return this;
+    }
     this.set('online', false);
+    if (this.loginTimeout) {
+      clearTimeout(this.loginTimeout);
+    }
     this.con.disconnect('offline');
-    this.con.reset();
     return this;
   };
 
@@ -121,7 +134,7 @@ aChat = (function(_super) {
         break;
       case Strophe.Status.CONNFAIL:
         this.debug('Connection failed. Try again in 30s');
-        setTimeout(function() {
+        this.loginTimeout = setTimeout(function() {
           return _this.connect();
         }, 1000 * 30);
         break;
@@ -155,8 +168,8 @@ aChat = (function(_super) {
   };
 
   aChat.prototype.initViews = function() {
-    return this.views.push(new RosterView({
-      collection: this.roster,
+    return this.views.push(new aChatView({
+      model: this,
       id: this.get('id')
     }));
   };
@@ -473,6 +486,9 @@ Buddy = (function(_super) {
     XMLmsg.c(state.toLowerCase(), {
       xmlns: Strophe.NS.CHATSTATES
     });
+    if (msg !== '') {
+      this.trigger('message', msg);
+    }
     this.collection.main.con.send(XMLmsg);
     return true;
   };
@@ -484,6 +500,9 @@ Buddy = (function(_super) {
   Buddy.prototype.changeChatstate = function(state) {
     var futureState, timeoutTime,
       _this = this;
+    if (state == null) {
+      state = aChat.state.ACTIVE;
+    }
     if (state !== this.currentChatState) {
       this.send(null, state);
       this.currentChatState = state;
@@ -493,13 +512,15 @@ Buddy = (function(_super) {
     }
     switch (state) {
       case aChat.state.ACTIVE:
+        $(document).unbind('mousemove.aChat_chatState');
         futureState = aChat.state.INACTIVE;
         timeoutTime = 120000;
         break;
       case aChat.state.INACTIVE:
-        futureState = aChat.state.GONE;
-        timeoutTime = 600000;
-        break;
+        $(document).bind('mousemove.aChat_chatState', function() {
+          return _this.changeChatstate(aChat.state.ACTIVE);
+        });
+        return;
       case aChat.state.GONE:
         return;
       case aChat.state.COMPOSING:
@@ -604,37 +625,33 @@ RosterView = (function(_super) {
 
   RosterView.prototype.initialize = function() {
     this.listenTo(this.collection, 'add remove', this.render);
+    this.listenTo(this.collection.main, 'change:online', this.toggleOnline);
     if (this.collection) {
       this.render();
     }
     return this;
   };
 
-  RosterView.prototype.events = {
-    'click .logout': 'logout'
-  };
-
   RosterView.prototype.render = function() {
-    var buddy, button, template, _i, _len, _ref;
+    var buddy, _i, _len, _ref;
     this.collection.main.debug('render roster');
-    template = $('<ul id="aChat_roster">');
+    this.$el.html('');
     _ref = this.collection.models;
     for (_i = 0, _len = _ref.length; _i < _len; _i++) {
       buddy = _ref[_i];
       new RosterBuddyView({
         model: buddy,
-        el: $('<li>').appendTo(template)
+        el: $('<li>').appendTo(this.$el)
       });
     }
-    button = $('<input type="button" value="Log Out" class="logout" />');
-    template = template.add(button);
-    this.$el.html(template).appendTo($('body'));
     return true;
   };
 
   RosterView.prototype.logout = function() {
     return this.collection.main.disconnect();
   };
+
+  RosterView.prototype.toggleOnline = function(e) {};
 
   return RosterView;
 
@@ -652,7 +669,7 @@ RosterBuddyView = (function(_super) {
   _.extend(RosterBuddyView, Backbone.Events);
 
   RosterBuddyView.prototype.initialize = function() {
-    this.listenTo(this.model, 'change', this.render);
+    this.listenTo(this.model, 'change:status change:show change:msg', this.render);
     if (this.model) {
       this.render();
     }
@@ -660,20 +677,21 @@ RosterBuddyView = (function(_super) {
   };
 
   RosterBuddyView.prototype.events = {
-    'click': 'onClickBuddy'
+    'dblclick': 'onDblClickBuddy'
   };
 
   RosterBuddyView.prototype.render = function() {
     var template;
     this.model.collection.main.debug('render RosterBuddyView');
     _.templateSettings.variable = 'a';
-    template = this.model.get('jid') + ' ( ' + this.model.get('name') + ') - ' + this.model.get('show') + '/' + this.model.get('status');
+    template = this.model.get('name') || this.model.get('jid').split('@')[0];
     this.$el.html(template);
     return true;
   };
 
-  RosterBuddyView.prototype.onClickBuddy = function() {
-    return this.model.initView();
+  RosterBuddyView.prototype.onDblClickBuddy = function() {
+    this.model.initView();
+    return false;
   };
 
   return RosterBuddyView;
@@ -685,6 +703,11 @@ aChatView = (function(_super) {
   __extends(aChatView, _super);
 
   function aChatView() {
+    this.onMouseMove = __bind(this.onMouseMove, this);
+
+    this.onMouseUp = __bind(this.onMouseUp, this);
+
+    this.onMouseDown = __bind(this.onMouseDown, this);
     return aChatView.__super__.constructor.apply(this, arguments);
   }
 
@@ -692,17 +715,109 @@ aChatView = (function(_super) {
 
   aChatView.prototype.initialize = function() {
     this.listenTo(this.model, 'subscribe subscribed unsubscribe unsubscribed', this.info);
-    this.$el = $('body');
     return this.render();
   };
 
-  aChatView.prototype.info = function(jid) {
-    return this.model.views.push(new aChatInfoView);
+  aChatView.prototype.events = {
+    'change select[name="presenceStatus"]': 'onChangePresenceStatus',
+    'keydown input[name="presenceShow"]': 'onKeyDownPresenceShow',
+    'mousedown .aChatView': 'onMouseDown'
   };
 
-  aChatView.render = function() {
+  aChatView.prototype.dragdiff = null;
+
+  aChatView.prototype.info = function(jid) {};
+
+  aChatView.prototype.render = function() {
+    var template;
     this.model.debug('render aChatView');
-    return this.$el.html($('<div id="aChat">'));
+    template = $($.trim($("#aChatView").html()));
+    this.model.views.push(new RosterView({
+      collection: this.model.roster,
+      el: template.find('.RosterView')
+    }));
+    return this.$el.html(template).appendTo('body');
+  };
+
+  aChatView.prototype.onChangePresenceStatus = function() {
+    var obj, status;
+    status = this.$el.find('select[name="presenceStatus"]').val();
+    this.model.set('status', status);
+    switch (status) {
+      case 'online':
+        return this.model.connect();
+      case 'offline':
+        return this.model.disconnect();
+      default:
+        obj = {
+          status: status
+        };
+        if (this.model.get('show')) {
+          obj.show = this.model.get('show');
+        }
+        return this.model.con.send($pres(obj));
+    }
+  };
+
+  aChatView.prototype.onKeyDownPresenceShow = function(e) {
+    var obj, show;
+    e = $.event.fix(e);
+    if (e.keyCode === 13) {
+      show = this.$el.find('input[name="presenceShow"]').val();
+      this.model.set('show', show);
+      obj = {
+        show: show
+      };
+      if (this.model.get('status')) {
+        obj.status = this.model.get('status');
+      }
+      return this.model.con.send($pres(obj));
+    }
+  };
+
+  aChatView.prototype.onMouseDown = function(e) {
+    var offset;
+    e = $.event.fix(e);
+    if (e.target !== this.$el.find('.aChatView')[0]) {
+      return true;
+    }
+    $(document).bind('mouseup.aChat', this.onMouseUp);
+    $(document).bind('mousemove.aChat', this.onMouseMove);
+    offset = this.$el.find('.aChatView').offset();
+    this.dragdiff = {
+      x: e.pageX - offset.left,
+      y: e.pageY - offset.top
+    };
+    return false;
+  };
+
+  aChatView.prototype.onMouseUp = function(e) {
+    e = $.event.fix(e);
+    if (e.target !== this.$el.find('.aChatView')[0]) {
+      return true;
+    }
+    if (this.dragdiff) {
+      this.dragdiff = null;
+    }
+    $(document).unbind('.aChat');
+    if (this.$el.find('.aChatView').offset().top < 0) {
+      this.$el.find('.aChatView').css({
+        top: 0
+      });
+    }
+    return false;
+  };
+
+  aChatView.prototype.onMouseMove = function(e) {
+    if (!this.dragdiff) {
+      return true;
+    }
+    e = $.event.fix(e);
+    this.$el.find('.aChatView').css({
+      left: e.pageX - this.dragdiff.x,
+      top: e.pageY - this.dragdiff.y
+    });
+    return false;
   };
 
   return aChatView;
@@ -714,6 +829,16 @@ ChatWindowView = (function(_super) {
   __extends(ChatWindowView, _super);
 
   function ChatWindowView() {
+    this.onMouseMoveState = __bind(this.onMouseMoveState, this);
+
+    this.onMouseMoveHeader = __bind(this.onMouseMoveHeader, this);
+
+    this.onMouseUp = __bind(this.onMouseUp, this);
+
+    this.onMouseDownState = __bind(this.onMouseDownState, this);
+
+    this.onMouseDownHeader = __bind(this.onMouseDownHeader, this);
+
     this.minimize = __bind(this.minimize, this);
 
     this.close = __bind(this.close, this);
@@ -728,13 +853,18 @@ ChatWindowView = (function(_super) {
 
   ChatWindowView.prototype.initialize = function() {
     this.listenTo(this.model, 'change:state', this.handleState);
-    this["class"] = '.ChatWindowView';
+    this.$el.addClass('ChatWindowView');
     return this.render();
   };
 
   ChatWindowView.prototype.events = {
-    'keydown .ChatWindowView_msg>textarea': 'onKeyDownMsg'
+    'keydown .ChatWindowView_msg': 'onKeyDownMsg',
+    'click .ChatWindowView_close': 'onClickClose',
+    'mousedown .ChatWindowView_header': 'onMouseDownHeader',
+    'mousedown .ChatWindowView_state': 'onMouseDownState'
   };
+
+  ChatWindowView.prototype.dragdiff = null;
 
   ChatWindowView.prototype.handleState = function() {
     var state;
@@ -783,7 +913,8 @@ ChatWindowView = (function(_super) {
   ChatWindowView.prototype.close = function() {
     this.$el.remove();
     this.model.set('view', false);
-    return this.model.collection.main.trigger('removeView', this);
+    this.model.collection.main.trigger('removeView', this);
+    return false;
   };
 
   ChatWindowView.prototype.minimize = function() {
@@ -795,16 +926,85 @@ ChatWindowView = (function(_super) {
   };
 
   ChatWindowView.prototype.onClickClose = function() {
-    return this.model.set('state', 0);
+    this.model.set('state', 0);
+    return this.model.changeChatstate(aChat.state.GONE);
   };
 
   ChatWindowView.prototype.onKeyDownMsg = function(e) {
     this.model.changeChatstate(aChat.state.COMPOSING);
     if (e.keyCode === 13) {
+      if (e.ctrlKey) {
+        e.target.value = e.target.value + "\n";
+        return false;
+      }
       this.model.send(e.target.value);
       e.target.value = '';
       return false;
     }
+  };
+
+  ChatWindowView.prototype.onMouseDownHeader = function(e) {
+    var offset;
+    e = $.event.fix(e);
+    $(document).bind('mouseup.aChat', this.onMouseUp);
+    $(document).bind('mousemove.aChat', this.onMouseMoveHeader);
+    offset = this.$el.offset();
+    this.dragdiff = {
+      x: e.pageX - offset.left,
+      y: e.pageY - offset.top
+    };
+    return false;
+  };
+
+  ChatWindowView.prototype.onMouseDownState = function(e) {
+    var offset;
+    e = $.event.fix(e);
+    $(document).bind('mouseup.aChat', this.onMouseUp);
+    $(document).bind('mousemove.aChat', this.onMouseMoveState);
+    offset = $(e.target).offset();
+    this.dragdiff = {
+      x: e.pageX - offset.left,
+      y: e.pageY - offset.top
+    };
+    return false;
+  };
+
+  ChatWindowView.prototype.onMouseUp = function(e) {
+    if (this.dragdiff) {
+      this.dragdiff = null;
+    }
+    $(document).unbind('.aChat');
+    if (this.$el.offset().top < 0) {
+      this.$el.css({
+        top: 0
+      });
+    }
+    return false;
+  };
+
+  ChatWindowView.prototype.onMouseMoveHeader = function(e) {
+    if (!this.dragdiff) {
+      return true;
+    }
+    e = $.event.fix(e);
+    this.$el.css({
+      left: e.pageX - this.dragdiff.x,
+      top: e.pageY - this.dragdiff.y
+    });
+    return false;
+  };
+
+  ChatWindowView.prototype.onMouseMoveState = function(e) {
+    var offset;
+    if (!this.dragdiff) {
+      return true;
+    }
+    e = $.event.fix(e);
+    offset = this.$el.find('.ChatWindowView_chat').offset();
+    this.$el.find('.ChatWindowView_chat').css({
+      height: (e.pageY - offset.top) - this.dragdiff.y - 20
+    });
+    return false;
   };
 
   return ChatWindowView;
@@ -869,7 +1069,7 @@ StateView = (function(_super) {
       text = 'inactive';
     }
     if (this.model.checkstate(aChat.state.GONE)) {
-      text = 'gone';
+      text = 'has left the chat';
     }
     return this.$el.html(text);
   };
@@ -883,7 +1083,6 @@ $(function() {
   return a = new aChat({
     jid: 'admin@localhost',
     pw: 'tree',
-    login: true,
     debug: true,
     id: 'aChat'
   });

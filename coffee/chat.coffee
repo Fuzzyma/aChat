@@ -21,7 +21,7 @@ class aChat extends Backbone.Model
         this
 
     #Properties
-    @VERSION: '08.02.2013'
+    @VERSION: '15.02.2013'
     defaults:
         jid:null
         sid:null
@@ -32,10 +32,13 @@ class aChat extends Backbone.Model
         debug:false
         chatstates:true
         online:false
+        status:null
+        show:null
         
     con:null
     roster:null
     views:[]
+    loginTimeout:null
     
     @state:
         OPEN:     1<<0
@@ -50,6 +53,7 @@ class aChat extends Backbone.Model
     
     #connects or attachs to the server
     connect: =>
+        return @ if @get 'online'
         @con = new Strophe.Connection(@.get('httpbind'))
         if @.get('jid') and @.get('sid') and @.get('rid')
             @con.attach(@.get('jid'),@.get('sid'),@.get('rid'),@onconnect)
@@ -57,14 +61,16 @@ class aChat extends Backbone.Model
         else if @.get('jid') and @.get('pw')
             @con.connect(@.get('jid'),@.get('pw'),@onconnect)
             @debug("Connect to server with jid: #{@.get('jid')}, pw: #{@.get('pw')}");
+        @
         
     disconnect: =>
+        return @ if not @get 'online'
         @set 'online',false
         #@con.send $pres
         #    type:'unavailable'
         #    from:@get 'jid'    # Strophe doesnt send unavailable presence in tests. But doing it manually breaks the lib
+        clearTimeout @loginTimeout if @loginTimeout
         @con.disconnect('offline')
-        @con.reset()
         @
         
     onconnect: (status, error) =>
@@ -78,8 +84,8 @@ class aChat extends Backbone.Model
             when Strophe.Status.CONNECTING
                 @debug('Connect');
             when Strophe.Status.CONNFAIL
-                @debug('Connection failed. Try again in 30s'); #Todo: Should be changed later
-                setTimeout =>
+                @debug('Connection failed. Try again in 30s');
+                @loginTimeout = setTimeout =>
                     @connect()
                 ,1000*30
             when Strophe.Status.DISCONNECTING
@@ -118,8 +124,8 @@ class aChat extends Backbone.Model
         true
         
     initViews: =>
-        @views.push new RosterView
-            collection:@roster
+        @views.push new aChatView
+            model:@
             id: @get('id')
         
 
@@ -305,7 +311,7 @@ class Buddy extends Backbone.Model
         @trigger 'change:state', @
         this
         #end
-        
+    
     initView: =>
         if not @get 'view' 
             @collection.main.views.push new ChatWindowView model:@
@@ -341,6 +347,8 @@ class Buddy extends Backbone.Model
         
         XMLmsg.c(state.toLowerCase(), {xmlns: Strophe.NS.CHATSTATES})# if @chatstates and @collection.main.get('chatstates')
         
+        @trigger 'message', msg if msg isnt ''
+        
         @collection.main.con.send(XMLmsg);
         true
 
@@ -348,7 +356,7 @@ class Buddy extends Backbone.Model
         #alert(@get('state').toString(2) + ' & ' + state.toString(2) + ' == ' + (@get('state') & state).toString(2) + ' (' + ((@get('state') & state) == state) + ')')
         (@get('state') & state) is state
         
-    changeChatstate: (state) =>
+    changeChatstate: (state = aChat.state.ACTIVE) =>
         
         if state isnt @currentChatState
             @send null, state
@@ -358,11 +366,12 @@ class Buddy extends Backbone.Model
         
         switch state
             when aChat.state.ACTIVE
+                $(document).unbind 'mousemove.aChat_chatState'
                 futureState = aChat.state.INACTIVE
                 timeoutTime = 120000
             when aChat.state.INACTIVE
-                futureState = aChat.state.GONE
-                timeoutTime = 600000
+                $(document).bind 'mousemove.aChat_chatState', => @changeChatstate(aChat.state.ACTIVE)
+                return
             when aChat.state.GONE
                 return
             when aChat.state.COMPOSING
@@ -427,75 +436,140 @@ class RosterView extends Backbone.View
     _.extend(RosterView, Backbone.Events);
     initialize: ->
         @listenTo @collection,'add remove',@render
+        @listenTo @collection.main, 'change:online',@toggleOnline
         @render() if @collection
         @
     
-    events:
-        'click .logout':'logout'
-    
     render: =>
         @collection.main.debug 'render roster'
-        template = $('<ul id="aChat_roster">');
+        @$el.html('')
         for buddy in @collection.models
             new RosterBuddyView
                 model:buddy
-                el:$('<li>').appendTo(template)
-                
-        button = ($('<input type="button" value="Log Out" class="logout" />'))
-        template = template.add(button)
-        this.$el.html( template ).appendTo($('body'))
+                el:$('<li>').appendTo(@$el)
         true
         
     logout: ->
         @collection.main.disconnect()
         
+    toggleOnline: (e) ->
+        #disables/enables all buttons
+        
 
 class RosterBuddyView extends Backbone.View
     _.extend(RosterBuddyView, Backbone.Events)
     initialize: ->
-        @listenTo @model,'change',@render
+        @listenTo @model,'change:status change:show change:msg',@render
         @render() if @model
         @
         
     events:
-        'click':'onClickBuddy'
+        'dblclick':'onDblClickBuddy'
         
     render: =>
         @model.collection.main.debug 'render RosterBuddyView'
         _.templateSettings.variable = 'a'
         #template = _.template( $("#rosterView").html(), @model )
-        template = @model.get('jid') + ' ( ' + @model.get('name') + ') - ' + @model.get('show') + '/' + @model.get('status')
+        template = @model.get('name') || @model.get('jid').split('@')[0]
         this.$el.html( template )
         true
         
-    onClickBuddy: ->
+    onDblClickBuddy: ->
         @model.initView()
+        false
         
         
 class aChatView extends Backbone.View
     _.extend(aChatView, Backbone.Events)
     initialize: ->
         @listenTo @model, 'subscribe subscribed unsubscribe unsubscribed', @info
-        @$el = $('body')
         @render()
         
+    events:
+        'change select[name="presenceStatus"]':'onChangePresenceStatus'
+        'keydown input[name="presenceShow"]':'onKeyDownPresenceShow'
+        'mousedown .aChatView':'onMouseDown'
+    
+    dragdiff:null
+    
     info: (jid) ->
-        @model.views.push new aChatInfoView
-        
-    @render: ->
+        #@model.views.push new aChatInfoView #not implemented
+
+    render: ->
         @model.debug 'render aChatView'
-        this.$el.html($('<div id="aChat">'))
+        template = $($.trim($("#aChatView").html()))
+        @model.views.push new RosterView
+            collection:@model.roster
+            el:template.find('.RosterView')
+        @$el.html(template).appendTo('body') #happens only once
+
+    onChangePresenceStatus: ->
+        status = @$el.find('select[name="presenceStatus"]').val()
+        @model.set 'status', status
+        switch status
+            when 'online'
+                @model.connect()
+            when 'offline'
+                @model.disconnect()
+            else
+                obj = status:status
+                obj.show = @model.get 'show' if @model.get 'show'
+                @model.con.send $pres obj
+                
+    onKeyDownPresenceShow: (e) ->
+        e = $.event.fix e
+        if(e.keyCode == 13)
+            show = @$el.find('input[name="presenceShow"]').val()
+            @model.set 'show', show
+            obj = show:show
+            obj.status = @model.get 'status' if @model.get 'status'
+            @model.con.send $pres obj
+            
+    onMouseDown: (e) =>
+        e = $.event.fix e
+        return true if e.target isnt @$el.find('.aChatView')[0]
+        $(document).bind('mouseup.aChat',@onMouseUp)
+        $(document).bind('mousemove.aChat',@onMouseMove)
+        
+        offset = @$el.find('.aChatView').offset()
+        
+        @dragdiff = 
+            x:e.pageX-offset.left
+            y:e.pageY-offset.top
+        false
+            
+    onMouseUp: (e) =>
+        e = $.event.fix e
+        return true if e.target isnt @$el.find('.aChatView')[0]
+        @dragdiff = null if @dragdiff
+        $(document).unbind('.aChat');
+        if @$el.find('.aChatView').offset().top < 0
+            @$el.find('.aChatView').css top:0
+        false
+        
+    onMouseMove: (e) =>
+        return true if not @dragdiff
+        e = $.event.fix e
+        @$el.find('.aChatView').css
+            left:e.pageX-@dragdiff.x
+            top:e.pageY-@dragdiff.y
+        false
         
 class ChatWindowView extends Backbone.View
     _.extend(ChatWindowView, Backbone.Events)
     initialize: ->
         @listenTo @model, 'change:state', @handleState
-        @class = '.ChatWindowView'
+        @$el.addClass 'ChatWindowView'
         @render()
         
         
     events:
-        'keydown .ChatWindowView_msg>textarea':'onKeyDownMsg'
+        'keydown .ChatWindowView_msg':'onKeyDownMsg'
+        'click .ChatWindowView_close':'onClickClose'
+        'mousedown .ChatWindowView_header':'onMouseDownHeader'
+        'mousedown .ChatWindowView_state':'onMouseDownState'
+        
+    dragdiff:null
         
     handleState: =>
         state = @model.get 'state'
@@ -528,6 +602,7 @@ class ChatWindowView extends Backbone.View
         @$el.remove()
         @model.set 'view',false
         @model.collection.main.trigger 'removeView', @
+        false
         
     minimize: => true
         
@@ -536,13 +611,65 @@ class ChatWindowView extends Backbone.View
         
     onClickClose: ->
         @model.set 'state', 0
+        @model.changeChatstate aChat.state.GONE
         
     onKeyDownMsg: (e) ->
         @model.changeChatstate(aChat.state.COMPOSING)
         if(e.keyCode == 13)
+            if e.ctrlKey
+                e.target.value = e.target.value + "\n"
+                return false
             @model.send(e.target.value)
             e.target.value = ''
             false
+            
+    onMouseDownHeader: (e) =>
+        e = $.event.fix e
+        $(document).bind('mouseup.aChat',@onMouseUp)
+        $(document).bind('mousemove.aChat',@onMouseMoveHeader)
+        
+        offset = @$el.offset()
+        
+        @dragdiff = 
+            x:e.pageX-offset.left
+            y:e.pageY-offset.top
+        false
+        
+    onMouseDownState: (e) =>
+        e = $.event.fix e
+        $(document).bind('mouseup.aChat',@onMouseUp)
+        $(document).bind('mousemove.aChat',@onMouseMoveState)
+        
+        offset = $(e.target).offset()
+
+        @dragdiff = 
+            x:e.pageX-offset.left
+            y:e.pageY-offset.top
+        false
+            
+    onMouseUp: (e) =>
+        @dragdiff = null if @dragdiff
+        $(document).unbind('.aChat');
+        if @$el.offset().top < 0
+            @$el.css top:0
+        false
+        
+    onMouseMoveHeader: (e) =>
+        return true if not @dragdiff
+        e = $.event.fix e
+        @$el.css
+            left:e.pageX-@dragdiff.x
+            top:e.pageY-@dragdiff.y
+        false
+        
+    onMouseMoveState: (e) =>
+        return true if not @dragdiff
+        e = $.event.fix e
+        offset = @$el.find('.ChatWindowView_chat').offset()
+
+        @$el.find('.ChatWindowView_chat').css
+            height:(e.pageY-offset.top)-@dragdiff.y-20
+        false
         
 class MessageView extends Backbone.View
     _.extend(MessageView, Backbone.Events)
@@ -572,7 +699,7 @@ class StateView extends Backbone.View
         if(@model.checkstate aChat.state.INACTIVE)
             text = 'inactive'
         if(@model.checkstate aChat.state.GONE)
-            text = 'gone'
+            text = 'has left the chat'
         @$el.html text
             
         
@@ -581,7 +708,7 @@ $ ->
     a = new aChat
         jid:'admin@localhost'
         pw:'tree'
-        login:true
+        #login:true
         debug:true
         id:'aChat'
         #httpbind:'http://bosh.metajack.im:5280/xmpp-httpbind' #use this to connect to a server of yours
