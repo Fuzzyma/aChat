@@ -21,7 +21,7 @@
  </script>
  <script type="text/template" id="aChatView">
   <div class="aChatView">
-   <select name="presenceStatus">
+   <select name="presenceShow">
     <option value="online">Online</option>
     <option value="chat">Ready for Chat</option>
     <option value="away">Away</option>
@@ -29,7 +29,7 @@
     <option value="dnd">Busy</option>
     <option value="offline" selected="selected">Offline</option>
    </select>
-   <input type="text" name="presenceShow" placeholder="Write your status here" />
+   <input type="text" name="presenceStatus" placeholder="Write your status here" />
    <ul class="RosterView"></ul>
   </div>
  </script>
@@ -39,9 +39,11 @@
  <script type="text/javascript" src="lib/jquery-1.9.1.min.js"></script>
  <script type="text/javascript" src="lib/lodash.min.js"></script>
  <script type="text/javascript" src="lib/json2.js"></script>
- <script type="text/javascript" src="lib/backbone-min.js"></script>
- <script type="text/javascript" src="lib/strophe-1.0.1.min.js"></script>
- <!--<script src="http://jashkenas.github.com/coffee-script/extras/coffee-script.js" type="text/javascript" charset="utf-8"></script>-->
+ <script type="text/javascript" src="lib/backbone.js"></script>
+ <script type="text/javascript" src="lib/strophe.min.js"></script>
+ <script type="text/javascript" src="lib/plugins/disco/strophe.disco.js"></script>
+ <script type="text/javascript" src="lib/plugins/caps/sha1.js"></script>
+ <script type="text/javascript" src="lib/plugins/caps/strophe.caps.jsonly.js"></script>
  <script type="text/javascript" src="coffee/chat.js"></script>
  <link rel="stylesheet" href="css/aChat.css" />
 </head>

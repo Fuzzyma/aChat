@@ -5,7 +5,7 @@ The message stanza can contain a subject-tag. No idea, why a chat should have a 
 Thread-tags are for now not included, too. (http://tools.ietf.org/html/rfc6121#section-5.2.5)
 */
 
-var Buddy, ChatWindowView, MessageView, Roster, RosterBuddyView, RosterView, StateView, aChat, aChatView,
+var Buddy, ChatWindowView, MessageView, ResourceView, Roster, RosterBuddyView, RosterView, StateView, aChat, aChatView,
   __bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
   __hasProp = {}.hasOwnProperty,
   __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
@@ -28,6 +28,8 @@ aChat = (function(_super) {
     this.initRoster = __bind(this.initRoster, this);
 
     this.requestRoster = __bind(this.requestRoster, this);
+
+    this.initDiscoPlugin = __bind(this.initDiscoPlugin, this);
 
     this.initViews = __bind(this.initViews, this);
 
@@ -95,6 +97,7 @@ aChat = (function(_super) {
       return this;
     }
     this.con = new Strophe.Connection(this.get('httpbind'));
+    this.initDiscoPlugin();
     if (this.get('jid') && this.get('sid') && this.get('rid')) {
       this.con.attach(this.get('jid'), this.get('sid'), this.get('rid'), this.onconnect);
       this.debug("Attach to session with jid: " + (this.get('jid')) + ", sid: " + (this.get('sid')) + ", rid: " + (this.get('rid')));
@@ -155,6 +158,7 @@ aChat = (function(_super) {
         this.con.addHandler(_.bind(this.handle.message.chat, this), null, 'message', 'chat');
         this.con.addHandler(_.bind(this.handle.message.chat, this), null, 'message', 'normal');
         this.con.addHandler(_.bind(this.handle.message.chatstates, this), Strophe.NS.CHATSTATES, 'message');
+        this.con.addHandler(_.bind(this.handle.message.thread, this), null, 'thread');
         this.con.addHandler(_.bind(this.handle.error, this), null, 'error');
         this.con.addHandler(_.bind(this.handle.iq.get, this), null, 'iq', 'get');
         this.con.addHandler(_.bind(this.handle.iq.set, this), null, 'iq', 'set');
@@ -172,6 +176,12 @@ aChat = (function(_super) {
       model: this,
       id: this.get('id')
     }));
+  };
+
+  aChat.prototype.initDiscoPlugin = function() {
+    this.con.disco.addIdentity('client', 'web', 'aChat', '');
+    this.con.disco.addFeature(Strophe.NS.CHATSTATES);
+    return this.con.caps.node = 'https://github.com/Fuzzyma/aChat';
   };
 
   aChat.prototype.requestRoster = function() {
@@ -204,9 +214,12 @@ aChat = (function(_super) {
       }));
     }
     this.debug('Sending initial Presence!');
+    this.debug($pres({
+      from: this.get('jid')
+    }).c('c', this.con.caps.generateCapsAttrs()).tree());
     this.con.send($pres({
       from: this.get('jid')
-    }));
+    }).c('c', this.con.caps.generateCapsAttrs()));
     return false;
   };
 
@@ -223,7 +236,7 @@ aChat = (function(_super) {
       to: Strophe.getBareJidFromJid(buddy.get('jid')),
       type: 'subscribe',
       id: this.con.getUniqueId()
-    }));
+    }).c('c', this.con.caps.generateCapsAttrs()));
   };
 
   aChat.prototype.subscribed = function(buddy) {
@@ -231,7 +244,7 @@ aChat = (function(_super) {
       to: Strophe.getBareJidFromJid(buddy.get('jid')),
       type: 'subscribed',
       id: this.con.getUniqueId()
-    }));
+    }).c('c', this.con.caps.generateCapsAttrs()));
   };
 
   aChat.prototype.unsubscribe = function(buddy) {
@@ -239,7 +252,7 @@ aChat = (function(_super) {
       to: Strophe.getBareJidFromJid(buddy.get('jid')),
       type: 'unsubscribe',
       id: this.con.getUniqueId()
-    }));
+    }).c('c', this.con.caps.generateCapsAttrs()));
   };
 
   aChat.prototype.unsubscribed = function(buddy) {
@@ -247,22 +260,23 @@ aChat = (function(_super) {
       to: Strophe.getBareJidFromJid(buddy.get('jid')),
       type: 'unsubscribed',
       id: this.con.getUniqueId()
-    }));
+    }).c('c', this.con.caps.generateCapsAttrs()));
   };
 
   aChat.prototype.handle = {
     message: {
       chat: function(msg) {
-        var body, buddy;
+        var body, buddy, jid;
+        jid = msg.getAttribute('from');
         buddy = this.roster.where({
-          jid: Strophe.xmlescape(Strophe.getBareJidFromJid(msg.getAttribute('from')))
+          jid: Strophe.xmlescape(Strophe.getBareJidFromJid(jid))
         })[0];
         if (!buddy) {
           return true;
         }
         body = msg.getElementsByTagName('body')[0];
         if (body) {
-          buddy.trigger('message', Strophe.xmlescape(Strophe.getText(body)));
+          buddy.trigger('message', Strophe.xmlescape(Strophe.getText(body)), Strophe.getResourceFromJid(jid));
         }
         return true;
       },
@@ -276,6 +290,22 @@ aChat = (function(_super) {
         }
         state = msg.lastElementChild || msg.children[msg.children.length - 1];
         buddy.trigger('chatstate', state.nodeName);
+        return true;
+      },
+      thread: function(msg) {
+        var buddy, thread;
+        buddy = this.roster.where({
+          jid: Strophe.xmlescape(Strophe.getBareJidFromJid(msg.getAttribute('from')))
+        })[0];
+        if (!buddy) {
+          return true;
+        }
+        thread = msg.getElementsByTagName('thread');
+        if (!thread.length) {
+          return true;
+        }
+        buddy.trigger('thread', Strophe.getText(thread[0]));
+        this.debug('thread triggered');
         return true;
       }
     },
@@ -332,18 +362,25 @@ aChat = (function(_super) {
     },
     presence: {
       unavailable: function(msg) {
-        var buddy;
+        var buddy, jid, resources;
+        jid = msg.getAttribute('from');
         buddy = this.roster.where({
-          jid: Strophe.getBareJidFromJid(msg.getAttribute('from'))
+          jid: Strophe.getBareJidFromJid(jid)
         })[0];
         if (!buddy) {
           return true;
         }
-        buddy.set({
-          'online': false,
+        resources = buddy.get('resources');
+        resources[Strophe.getResourceFromJid(jid)] = {
+          'show': null,
           'status': Strophe.getText(msg.getElementsByTagName('status')[0]) || null,
-          'show': null
-        });
+          'online': true
+        };
+        buddy.set('resources', resources);
+        if (buddy.get('activeRessource' === Strophe.getResourceFromJid(jid))) {
+          buddy.set('activeRessource', null);
+        }
+        buddy.trigger('change:resources');
         return true;
       },
       subscription: function(msg) {
@@ -356,20 +393,25 @@ aChat = (function(_super) {
         return true;
       },
       general: function(msg) {
-        var buddy;
+        var buddy, jid, resources;
         if (msg.getAttribute('type')) {
           return true;
         }
+        jid = msg.getAttribute('from');
         buddy = this.roster.where({
-          jid: Strophe.getBareJidFromJid(msg.getAttribute('from'))
+          jid: Strophe.getBareJidFromJid(jid)
         })[0];
         if (!buddy) {
           return true;
         }
-        buddy.set({
+        resources = buddy.get('resources');
+        resources[Strophe.getResourceFromJid(jid)] = {
           'show': Strophe.getText(msg.getElementsByTagName('show')[0]) || null,
-          'status': Strophe.getText(msg.getElementsByTagName('status')[0]) || null
-        });
+          'status': Strophe.getText(msg.getElementsByTagName('status')[0]) || null,
+          'online': true
+        };
+        buddy.set('resources', resources);
+        buddy.trigger('change:resources');
         return true;
       }
     }
@@ -406,19 +448,35 @@ Buddy = (function(_super) {
 
   Buddy.prototype.initialize = function() {
     var _this = this;
-    this.on('message', function(msg) {
+    new ResourceView({
+      model: this
+    });
+    this.on('message', function(msg, resource) {
       var msgObj;
       _this.initView();
-      console.log(msg);
+      if (resource) {
+        _this.set('activeResource', resource);
+        console.log('Active Resource switched to ' + resource);
+        if (!_this.get('resources')[resource].online) {
+          _this.set('activeResource', null);
+          console.log('Active Resource switched to null');
+        }
+      }
       msgObj = _this.get('msg');
       msgObj[+(new Date)] = msg;
       _this.set('msg', msgObj);
       _this.trigger('change:msg', _this);
-      return _this.set('state', _this.get('state') | aChat.state.UPDATE);
+      _this.set('state', _this.get('state') | aChat.state.UPDATE);
+      return true;
     });
     this.on('chatstate', function(state) {
       _this.set('state', _this.get('state') & ~(aChat.state.ACTIVE | aChat.state.COMPOSING | aChat.state.PAUSED | aChat.state.INACTIVE | aChat.state.GONE) | aChat.state[state.toUpperCase()]);
-      return console.log(state);
+      return true;
+    });
+    this.on('thread', function(thread) {
+      _this.set('thread', thread);
+      _this.collection.main.debug('Thread changed to ' + thread);
+      return trze;
     });
     this.on('change:state', function() {
       var d, i, text, _ref;
@@ -428,11 +486,38 @@ Buddy = (function(_super) {
         d = _ref[i];
         text += i + ': ' + _this.checkstate(d) + '<br />';
       }
-      return $('#flags').html(text);
+      $('#flags').html(text);
+      return true;
     });
     this.trigger('change:state', this);
     return this;
   };
+
+  Buddy.prototype.defaults = {
+    jid: null,
+    name: null,
+    subscription: null,
+    ask: null,
+    groups: [],
+    chatstates: false,
+    resources: {
+      /*
+                  ressource1:
+                      status:'At work'
+                      show:'dnd'
+                      online:true
+      */
+
+    },
+    activeResource: null,
+    msg: {},
+    state: 0,
+    view: false,
+    currentChatState: aChat.state.ACTIVE,
+    thread: null
+  };
+
+  Buddy.prototype.chatStateTimer = null;
 
   Buddy.prototype.initView = function() {
     if (!this.get('view')) {
@@ -443,25 +528,8 @@ Buddy = (function(_super) {
     }
   };
 
-  Buddy.prototype.defaults = {
-    jid: null,
-    name: null,
-    subscription: null,
-    ask: null,
-    groups: [],
-    chatstates: false,
-    status: null,
-    show: null,
-    msg: {},
-    state: 0,
-    view: false,
-    currentChatState: aChat.state.ACTIVE
-  };
-
-  Buddy.prototype.chatStateTimer = null;
-
   Buddy.prototype.send = function(msg, chatstate) {
-    var XMLmsg, n, state, _ref;
+    var XMLmsg, n, resource, state, _ref;
     if (msg == null) {
       msg = '';
     }
@@ -471,11 +539,21 @@ Buddy = (function(_super) {
     if (!this.collection.main.get('online')) {
       return;
     }
+    if (this.chatStateTimer) {
+      clearTimeout(this.chatStateTimer);
+    }
+    if (!this.get('thread')) {
+      this.set('thread', this.collection.main.con.getUniqueId());
+    }
+    resource = '';
+    if (this.get('activeResource')) {
+      resource = '/' + this.get('activeResource');
+    }
     XMLmsg = $msg({
       from: this.collection.main.get('jid'),
-      to: this.get('jid'),
+      to: this.get('jid') + resource,
       type: 'chat'
-    }).c('body').t(msg).up();
+    }).c('body').t(msg).up().c('thread').t(this.get('thread')).up();
     _ref = aChat.state;
     for (state in _ref) {
       n = _ref[state];
@@ -490,6 +568,7 @@ Buddy = (function(_super) {
       this.trigger('message', msg);
     }
     this.collection.main.con.send(XMLmsg);
+    this.collection.main.debug(XMLmsg);
     return true;
   };
 
@@ -525,7 +604,7 @@ Buddy = (function(_super) {
         return;
       case aChat.state.COMPOSING:
         futureState = aChat.state.PAUSED;
-        timeoutTime = 1000;
+        timeoutTime = 2000;
         break;
       case aChat.state.PAUSED:
         futureState = aChat.state.INACTIVE;
@@ -647,10 +726,6 @@ RosterView = (function(_super) {
     return true;
   };
 
-  RosterView.prototype.logout = function() {
-    return this.collection.main.disconnect();
-  };
-
   RosterView.prototype.toggleOnline = function(e) {};
 
   return RosterView;
@@ -719,8 +794,8 @@ aChatView = (function(_super) {
   };
 
   aChatView.prototype.events = {
-    'change select[name="presenceStatus"]': 'onChangePresenceStatus',
-    'keydown input[name="presenceShow"]': 'onKeyDownPresenceShow',
+    'change select[name="presenceShow"]': 'onChangePresenceShow',
+    'keydown input[name="presenceStatus"]': 'onKeyDownPresenceStatus',
     'mousedown .aChatView': 'onMouseDown'
   };
 
@@ -739,39 +814,39 @@ aChatView = (function(_super) {
     return this.$el.html(template).appendTo('body');
   };
 
-  aChatView.prototype.onChangePresenceStatus = function() {
-    var obj, status;
-    status = this.$el.find('select[name="presenceStatus"]').val();
-    this.model.set('status', status);
-    switch (status) {
+  aChatView.prototype.onChangePresenceShow = function() {
+    var obj, show;
+    show = this.$el.find('select[name="presenceShow"]').val();
+    this.model.set('show', show);
+    switch (show) {
       case 'online':
         return this.model.connect();
       case 'offline':
         return this.model.disconnect();
       default:
         obj = {
-          status: status
+          show: show
         };
-        if (this.model.get('show')) {
-          obj.show = this.model.get('show');
+        if (this.model.get('status')) {
+          obj.show = this.model.get('status');
         }
-        return this.model.con.send($pres(obj));
+        return this.model.con.send($pres(obj).c('c', this.model.con.caps.generateCapsAttrs()));
     }
   };
 
-  aChatView.prototype.onKeyDownPresenceShow = function(e) {
-    var obj, show;
+  aChatView.prototype.onKeyDownPresenceStatus = function(e) {
+    var obj, status;
     e = $.event.fix(e);
     if (e.keyCode === 13) {
-      show = this.$el.find('input[name="presenceShow"]').val();
-      this.model.set('show', show);
+      status = this.$el.find('input[name="presenceStatus"]').val();
+      this.model.set('status', status);
       obj = {
-        show: show
+        status: status
       };
-      if (this.model.get('status')) {
-        obj.status = this.model.get('status');
+      if (this.model.get('show')) {
+        obj.show = this.model.get('show');
       }
-      return this.model.con.send($pres(obj));
+      return this.model.con.send($pres(obj).c('c', this.model.con.caps.generateCapsAttrs()));
     }
   };
 
@@ -1075,6 +1150,38 @@ StateView = (function(_super) {
   };
 
   return StateView;
+
+})(Backbone.View);
+
+ResourceView = (function(_super) {
+
+  __extends(ResourceView, _super);
+
+  function ResourceView() {
+    this.render = __bind(this.render, this);
+    return ResourceView.__super__.constructor.apply(this, arguments);
+  }
+
+  _.extend(ResourceView, Backbone.Events);
+
+  ResourceView.prototype.initialize = function() {
+    this.listenTo(this.model, 'change:resources', this.render);
+    this.listenTo(this.model, 'change:msg', this.render);
+    return this.$el.appendTo('body');
+  };
+
+  ResourceView.prototype.render = function() {
+    var html, i, j, res;
+    res = this.model.get('resources');
+    html = 'active-resource: ' + this.model.get('activeResource') + ' -> ';
+    for (i in res) {
+      j = res[i];
+      html += i + ': ' + j.show + ' / ' + j.status + ' / ' + j.online + '<br />';
+    }
+    return this.$el.html(html);
+  };
+
+  return ResourceView;
 
 })(Backbone.View);
 

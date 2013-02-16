@@ -22,7 +22,7 @@ border:1px solid rgba(100,100,100,0.5);
 cursor:move;
 }
 
-#aChat .aChatView select[name="presenceStatus"]{
+#aChat .aChatView select[name="presenceShow"]{
 font-family:helvetica;
 font-size:12px;
 line-height:12px;
@@ -46,7 +46,7 @@ filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#b7f4c5', end
 color:#444;
 }
 
-#aChat .aChatView select[name="presenceStatus"] option{
+#aChat .aChatView select[name="presenceShow"] option{
 font-family:helvetica;
 font-size:12px;
 line-height:12px;
@@ -60,7 +60,7 @@ background: #b7f4c5; /* Old browsers */
 color:#333;
 }
 
-#aChat .aChatView input[name="presenceShow"]{
+#aChat .aChatView input[name="presenceStatus"]{
 width:100%;
 padding:10px;
 font-family:helvetica;

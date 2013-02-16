@@ -55,6 +55,7 @@ class aChat extends Backbone.Model
     connect: =>
         return @ if @get 'online'
         @con = new Strophe.Connection(@.get('httpbind'))
+        @initDiscoPlugin()
         if @.get('jid') and @.get('sid') and @.get('rid')
             @con.attach(@.get('jid'),@.get('sid'),@.get('rid'),@onconnect)
             @debug("Attach to session with jid: #{@.get('jid')}, sid: #{@.get('sid')}, rid: #{@.get('rid')}");
@@ -102,6 +103,7 @@ class aChat extends Backbone.Model
                 @con.addHandler _.bind(@handle.message.chat,@), null, 'message', 'chat'
                 @con.addHandler _.bind(@handle.message.chat,@), null, 'message', 'normal'
                 @con.addHandler _.bind(@handle.message.chatstates,@), Strophe.NS.CHATSTATES, 'message'
+                @con.addHandler _.bind(@handle.message.thread,@), null, 'thread'
                 #@con.addHandler _.bind(@handle.message.groupchat, null, 'message', 'groupchat'# for now we will ignore groupchat
                 
                 @con.addHandler _.bind(@handle.error,@), null, 'error'
@@ -127,7 +129,11 @@ class aChat extends Backbone.Model
         @views.push new aChatView
             model:@
             id: @get('id')
-        
+    
+    initDiscoPlugin: =>
+        @con.disco.addIdentity 'client', 'web', 'aChat', ''
+        @con.disco.addFeature Strophe.NS.CHATSTATES
+        @con.caps.node = 'https://github.com/Fuzzyma/aChat'
 
     requestRoster: =>
 
@@ -156,7 +162,8 @@ class aChat extends Backbone.Model
                 groups: buddy.getElementsByTagName 'group'
 
         @debug 'Sending initial Presence!'
-        @con.send $pres( from: @.get('jid') )
+        @debug $pres( from: @.get('jid') ).c('c',@con.caps.generateCapsAttrs()).tree()
+        @con.send $pres( from: @.get('jid') ).c('c',@con.caps.generateCapsAttrs())
         false
     
     #Creates and send an iq-result-stanza for a special id
@@ -169,50 +176,63 @@ class aChat extends Backbone.Model
     
     #Send a subscription request to a contact
     subscribe: (buddy) =>
-        @con.send $pres
+        @con.send $pres(
             to: Strophe.getBareJidFromJid buddy.get 'jid'
             type: 'subscribe'
             id: @con.getUniqueId()
+        ).c('c',@con.caps.generateCapsAttrs())
         return
         
     #Approve the subscription request of a contact
     subscribed: (buddy) =>
-        @con.send $pres
+        @con.send $pres(
             to: Strophe.getBareJidFromJid buddy.get 'jid'
             type: 'subscribed'
             id: @con.getUniqueId()
+        ).c('c',@con.caps.generateCapsAttrs())
         return
         
     #Send a unsubscription request to a contact
     unsubscribe: (buddy) =>
-        @con.send $pres
+        @con.send $pres(
             to: Strophe.getBareJidFromJid buddy.get 'jid'
             type: 'unsubscribe'
             id: @con.getUniqueId()
+        ).c('c',@con.caps.generateCapsAttrs())
         return
         
     #Denies the subscription request of a contact
     unsubscribed: (buddy) =>
-        @con.send $pres
+        @con.send $pres(
             to: Strophe.getBareJidFromJid buddy.get 'jid'
             type: 'unsubscribed'
             id: @con.getUniqueId()
+        ).c('c',@con.caps.generateCapsAttrs())
         return
     
     # handler for the stanzas
     handle:
         message:
             chat: (msg) ->
-                buddy = @roster.where(jid:Strophe.xmlescape Strophe.getBareJidFromJid(msg.getAttribute('from')))[0]
-                return true if not buddy
+                jid = msg.getAttribute('from')
+                buddy = @roster.where(jid:Strophe.xmlescape Strophe.getBareJidFromJid(jid))[0]
+                return true if not buddy #Not in List - open own window
                 body = msg.getElementsByTagName('body')[0]
-                buddy.trigger 'message', Strophe.xmlescape Strophe.getText(body) if body
+                buddy.trigger 'message', Strophe.xmlescape(Strophe.getText(body)), Strophe.getResourceFromJid jid if body
                 true
             chatstates: (msg) ->
                 buddy = @roster.where(jid:Strophe.xmlescape Strophe.getBareJidFromJid(msg.getAttribute('from')))[0]
                 return true if not buddy
                 state = msg.lastElementChild || msg.children[msg.children.length-1]
                 buddy.trigger 'chatstate', state.nodeName
+                true
+            thread: (msg) ->
+                buddy = @roster.where(jid:Strophe.xmlescape Strophe.getBareJidFromJid(msg.getAttribute('from')))[0]
+                return true if not buddy
+                thread = msg.getElementsByTagName('thread')
+                return true if not thread.length
+                buddy.trigger 'thread', Strophe.getText(thread[0]) 
+                @debug 'thread triggered'
                 true
         error: (msg) ->
             @debug msg
@@ -249,12 +269,18 @@ class aChat extends Backbone.Model
                 true
         presence:
             unavailable: (msg) ->
-                buddy = @roster.where(jid:Strophe.getBareJidFromJid msg.getAttribute 'from')[0]
+                jid = msg.getAttribute 'from'
+                buddy = @roster.where(jid:Strophe.getBareJidFromJid jid)[0]
                 return true if(!buddy) #if buddy == me or buddy not subscribed
-                buddy.set
-                    'online':false
-                    'status':Strophe.getText(msg.getElementsByTagName('status')[0]) || null
+                resources = buddy.get 'resources'
+                resources[Strophe.getResourceFromJid jid] = 
                     'show':null
+                    'status':Strophe.getText(msg.getElementsByTagName('status')[0]) || null
+                    'online':true
+                buddy.set 'resources', resources
+                if(buddy.get 'activeRessource' == Strophe.getResourceFromJid jid)
+                    buddy.set 'activeRessource', null
+                buddy.trigger 'change:resources'
                 true
  
             subscription: (msg) ->
@@ -267,13 +293,23 @@ class aChat extends Backbone.Model
                 #unsubscribed -> somebody denyed to subscribe
                 true
 
+            #Sets the presence for a special resource
             general: (msg) ->
+
                 return true if msg.getAttribute('type')
-                buddy = @roster.where(jid:Strophe.getBareJidFromJid msg.getAttribute 'from')[0]
+
+                jid = msg.getAttribute 'from'
+                buddy = @roster.where(jid:Strophe.getBareJidFromJid jid)[0]
                 return true if(!buddy) #if buddy == me or buddy not subscribed
-                buddy.set
+
+                resources = buddy.get 'resources'
+                resources[Strophe.getResourceFromJid jid] = 
                     'show':Strophe.getText(msg.getElementsByTagName('show')[0]) || null  #can be away, chat, dnd or xa
                     'status':Strophe.getText(msg.getElementsByTagName('status')[0]) || null
+                    'online':true
+
+                buddy.set 'resources', resources
+                buddy.trigger 'change:resources'
                 true
 
     #initialize the strophe-debug, setting the console as debug-output
@@ -286,19 +322,32 @@ class aChat extends Backbone.Model
 class Buddy extends Backbone.Model
     _.extend(Buddy, Backbone.Events)
     initialize: ->
-        @on 'message', (msg) =>
+        new ResourceView model:@ #debugging
+        @on 'message', (msg, resource) =>
             @initView()
-            console.log msg
+            if resource
+                @set 'activeResource', resource
+                console.log 'Active Resource switched to '+resource
+                if(!@get('resources')[resource].online)
+                    @set 'activeResource', null
+                    console.log 'Active Resource switched to null'
+
             msgObj = @get 'msg'
             msgObj[+new Date] = msg
             @set 'msg', msgObj
             @trigger 'change:msg', @
             @set 'state', @get('state') | aChat.state.UPDATE
-                        
-            
+            true
+    
         @on 'chatstate', (state) =>
             @set 'state', @get('state') &~ (aChat.state.ACTIVE | aChat.state.COMPOSING | aChat.state.PAUSED | aChat.state.INACTIVE | aChat.state.GONE) | aChat.state[state.toUpperCase()]
-            console.log state # log the chatstate
+            true
+        
+        @on 'thread', (thread) =>
+            @set 'thread', thread
+            @collection.main.debug 'Thread changed to '+thread;
+            trze
+            
         
         #Stuff for debugging
         @on 'change:state', => 
@@ -307,15 +356,12 @@ class Buddy extends Backbone.Model
                 text += i + ': ' + @checkstate(d) + '<br />'
 
             $('#flags').html text
-            
+            true
+        #end
+        
         @trigger 'change:state', @
         this
-        #end
-    
-    initView: =>
-        if not @get 'view' 
-            @collection.main.views.push new ChatWindowView model:@
-            @set 'state', @get('state') | aChat.state.OPEN
+        
     
     defaults:
         jid:null
@@ -324,22 +370,46 @@ class Buddy extends Backbone.Model
         ask:null
         groups:[]
         chatstates:false
-        status:null
-        show:null
+        resources:{
+            ###
+            ressource1:
+                status:'At work'
+                show:'dnd'
+                online:true
+            ###
+        }
+        activeResource:null
+        #status:null
+        #show:null
         msg:{}
         state:0
         view:false
         currentChatState:aChat.state.ACTIVE
-        
+        thread:null
+    
     chatStateTimer:null
+    
+    initView: =>
+        if not @get 'view' 
+            @collection.main.views.push new ChatWindowView model:@
+            @set 'state', @get('state') | aChat.state.OPEN
         
     send: (msg = '', chatstate = aChat.state.ACTIVE) =>
         return if not @collection.main.get 'online'
+        
+        clearTimeout(@chatStateTimer) if @chatStateTimer #we are active - if there is a timer, its the paused, timer. So clear it!
+        
+        if not @get 'thread'
+            @set 'thread',@collection.main.con.getUniqueId()
+
+        resource = ''
+        resource = '/' + @get 'activeResource' if @get 'activeResource'
         XMLmsg = $msg
             from: @collection.main.get('jid')
-            to: @get('jid')
+            to: @get('jid')+resource
             type: 'chat'
         .c('body').t(msg).up()
+        .c('thread').t(@get 'thread').up()
         
         for state,n of aChat.state
             if n is chatstate
@@ -349,7 +419,8 @@ class Buddy extends Backbone.Model
         
         @trigger 'message', msg if msg isnt ''
         
-        @collection.main.con.send(XMLmsg);
+        @collection.main.con.send(XMLmsg)
+        @collection.main.debug(XMLmsg)
         true
 
     checkstate: (state) =>
@@ -376,7 +447,7 @@ class Buddy extends Backbone.Model
                 return
             when aChat.state.COMPOSING
                 futureState = aChat.state.PAUSED
-                timeoutTime = 1000
+                timeoutTime = 2000
             when aChat.state.PAUSED
                 futureState = aChat.state.INACTIVE
                 timeoutTime = 120000
@@ -449,9 +520,6 @@ class RosterView extends Backbone.View
                 el:$('<li>').appendTo(@$el)
         true
         
-    logout: ->
-        @collection.main.disconnect()
-        
     toggleOnline: (e) ->
         #disables/enables all buttons
         
@@ -486,8 +554,8 @@ class aChatView extends Backbone.View
         @render()
         
     events:
-        'change select[name="presenceStatus"]':'onChangePresenceStatus'
-        'keydown input[name="presenceShow"]':'onKeyDownPresenceShow'
+        'change select[name="presenceShow"]':'onChangePresenceShow'
+        'keydown input[name="presenceStatus"]':'onKeyDownPresenceStatus'
         'mousedown .aChatView':'onMouseDown'
     
     dragdiff:null
@@ -503,27 +571,27 @@ class aChatView extends Backbone.View
             el:template.find('.RosterView')
         @$el.html(template).appendTo('body') #happens only once
 
-    onChangePresenceStatus: ->
-        status = @$el.find('select[name="presenceStatus"]').val()
-        @model.set 'status', status
-        switch status
+    onChangePresenceShow: ->
+        show = @$el.find('select[name="presenceShow"]').val()
+        @model.set 'show', show
+        switch show
             when 'online'
                 @model.connect()
             when 'offline'
                 @model.disconnect()
             else
-                obj = status:status
-                obj.show = @model.get 'show' if @model.get 'show'
-                @model.con.send $pres obj
+                obj = show:show
+                obj.show = @model.get 'status' if @model.get 'status'
+                @model.con.send $pres(obj).c('c',@model.con.caps.generateCapsAttrs())
                 
-    onKeyDownPresenceShow: (e) ->
+    onKeyDownPresenceStatus: (e) ->
         e = $.event.fix e
         if(e.keyCode == 13)
-            show = @$el.find('input[name="presenceShow"]').val()
-            @model.set 'show', show
-            obj = show:show
-            obj.status = @model.get 'status' if @model.get 'status'
-            @model.con.send $pres obj
+            status = @$el.find('input[name="presenceStatus"]').val()
+            @model.set 'status', status
+            obj = status:status
+            obj.show = @model.get 'show' if @model.get 'show'
+            @model.con.send $pres(obj).c('c',@model.con.caps.generateCapsAttrs())
             
     onMouseDown: (e) =>
         e = $.event.fix e
@@ -702,7 +770,19 @@ class StateView extends Backbone.View
             text = 'has left the chat'
         @$el.html text
             
+class ResourceView extends Backbone.View
+    _.extend(ResourceView, Backbone.Events)
+    initialize: ->
+        @listenTo @model, 'change:resources', @render
+        @listenTo @model, 'change:msg', @render
+        @$el.appendTo('body')
         
+    render: =>
+        res = @model.get 'resources'
+        html = 'active-resource: '+@model.get('activeResource') + ' -> '
+        for i,j of res
+            html += i+': '+j.show+' / '+j.status+' / '+j.online + '<br />'
+        @$el.html(html)
         
 $ ->
     a = new aChat
