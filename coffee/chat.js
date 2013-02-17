@@ -5,7 +5,7 @@ The message stanza can contain a subject-tag. No idea, why a chat should have a 
 Thread-tags are for now not included, too. (http://tools.ietf.org/html/rfc6121#section-5.2.5)
 */
 
-var Buddy, ChatWindowView, MessageView, ResourceView, Roster, RosterBuddyView, RosterView, StateView, aChat, aChatView,
+var Buddy, ChatWindowView, InfoView, MessageView, ResourceView, Roster, RosterBuddyView, RosterView, StateView, aChat, aChatView,
   __bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
   __hasProp = {}.hasOwnProperty,
   __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
@@ -29,9 +29,13 @@ aChat = (function(_super) {
 
     this.requestRoster = __bind(this.requestRoster, this);
 
+    this.removeView = __bind(this.removeView, this);
+
     this.initDiscoPlugin = __bind(this.initDiscoPlugin, this);
 
     this.initViews = __bind(this.initViews, this);
+
+    this.onDisconnected = __bind(this.onDisconnected, this);
 
     this.onconnect = __bind(this.onconnect, this);
 
@@ -44,6 +48,7 @@ aChat = (function(_super) {
   _.extend(aChat, Backbone.Events);
 
   aChat.prototype.initialize = function() {
+    this.views = [];
     this.roster = new Roster(null, this);
     Strophe.addNamespace('CHATSTATES', 'http://jabber.org/protocol/chatstates');
     if (this.get('login')) {
@@ -53,6 +58,10 @@ aChat = (function(_super) {
       this.initDebug();
     }
     this.initViews();
+    if (this.get('login')) {
+      $('#' + this.get('id') + ' select[name="presenceShow"] option[value="offline"]').removeAttr('selected');
+    }
+    this.on('removeView', this.removeView);
     return this;
   };
 
@@ -69,14 +78,15 @@ aChat = (function(_super) {
     chatstates: true,
     online: false,
     status: null,
-    show: null
+    show: null,
+    info: null
   };
 
   aChat.prototype.con = null;
 
   aChat.prototype.roster = null;
 
-  aChat.prototype.views = [];
+  aChat.prototype.views = null;
 
   aChat.prototype.loginTimeout = null;
 
@@ -146,6 +156,7 @@ aChat = (function(_super) {
         break;
       case Strophe.Status.DISCONNECTED:
         this.debug('Abgemeldet');
+        this.onDisconnected();
         break;
       case Strophe.Status.ATTACHED:
       case Strophe.Status.CONNECTED:
@@ -171,7 +182,10 @@ aChat = (function(_super) {
     return true;
   };
 
+  aChat.prototype.onDisconnected = function() {};
+
   aChat.prototype.initViews = function() {
+    _.templateSettings.variable = 'a';
     return this.views.push(new aChatView({
       model: this,
       id: this.get('id')
@@ -182,6 +196,12 @@ aChat = (function(_super) {
     this.con.disco.addIdentity('client', 'web', 'aChat', '');
     this.con.disco.addFeature(Strophe.NS.CHATSTATES);
     return this.con.caps.node = 'https://github.com/Fuzzyma/aChat';
+  };
+
+  aChat.prototype.removeView = function(view) {
+    var i;
+    i = _.indexOf(this.views, view);
+    return this.views[i] = null;
   };
 
   aChat.prototype.requestRoster = function() {
@@ -231,36 +251,51 @@ aChat = (function(_super) {
     }));
   };
 
-  aChat.prototype.subscribe = function(buddy) {
+  aChat.prototype.subscribe = function(jid, msg) {
+    if (msg == null) {
+      msg = '';
+    }
+    this.roster.create({
+      jid: jid
+    });
     this.con.send($pres({
-      to: Strophe.getBareJidFromJid(buddy.get('jid')),
+      to: Strophe.getBareJidFromJid(jid),
       type: 'subscribe',
       id: this.con.getUniqueId()
-    }).c('c', this.con.caps.generateCapsAttrs()));
+    }).c('status').t(msg).up().c('c', this.con.caps.generateCapsAttrs()));
   };
 
-  aChat.prototype.subscribed = function(buddy) {
+  aChat.prototype.subscribed = function(jid, msg) {
+    if (msg == null) {
+      msg = '';
+    }
     this.con.send($pres({
-      to: Strophe.getBareJidFromJid(buddy.get('jid')),
+      to: Strophe.getBareJidFromJid(jid),
       type: 'subscribed',
       id: this.con.getUniqueId()
-    }).c('c', this.con.caps.generateCapsAttrs()));
+    }).c('status').t(msg).up().c('c', this.con.caps.generateCapsAttrs()));
   };
 
-  aChat.prototype.unsubscribe = function(buddy) {
+  aChat.prototype.unsubscribe = function(jid, msg) {
+    if (msg == null) {
+      msg = '';
+    }
     this.con.send($pres({
-      to: Strophe.getBareJidFromJid(buddy.get('jid')),
+      to: Strophe.getBareJidFromJid(jid),
       type: 'unsubscribe',
       id: this.con.getUniqueId()
-    }).c('c', this.con.caps.generateCapsAttrs()));
+    }).c('status').t(msg).up().c('c', this.con.caps.generateCapsAttrs()));
   };
 
-  aChat.prototype.unsubscribed = function(buddy) {
+  aChat.prototype.unsubscribed = function(jid, msg) {
+    if (msg == null) {
+      msg = '';
+    }
     this.con.send($pres({
-      to: Strophe.getBareJidFromJid(buddy.get('jid')),
+      to: Strophe.getBareJidFromJid(jid),
       type: 'unsubscribed',
       id: this.con.getUniqueId()
-    }).c('c', this.con.caps.generateCapsAttrs()));
+    }).c('status').t(msg).up().c('c', this.con.caps.generateCapsAttrs()));
   };
 
   aChat.prototype.handle = {
@@ -315,14 +350,14 @@ aChat = (function(_super) {
     },
     iq: {
       get: function(msg) {
-        if (Strophe.getBareJidFromJid(msg.getAttribute('jid' !== this.jid))) {
-          return;
+        if (Strophe.getBareJidFromJid(msg.getAttribute('to')) !== this.get('jid')) {
+          return true;
         }
         return true;
       },
       set: function(msg) {
         var buddy, temp, _i, _len, _ref;
-        if (Strophe.getBareJidFromJid(msg.getAttribute('jid') !== this.jid)) {
+        if (Strophe.getBareJidFromJid(msg.getAttribute('to')) !== this.get('jid')) {
           return true;
         }
         switch (msg.getElementsByTagName('query')[0].getAttribute('xmlns')) {
@@ -333,8 +368,9 @@ aChat = (function(_super) {
               if ((temp = this.roster.where({
                 jid: Strophe.getBareJidFromJid(buddy.getAttribute('jid'))
               })).length) {
-                if (buddy.getAttribute('subscription' === 'remove')) {
-                  this.roster.erase(temp[0]);
+                if (buddy.getAttribute('subscription') === 'remove') {
+                  this.roster.remove(temp[0]);
+                  temp[0] = null;
                   break;
                 }
                 temp[0].set({
@@ -377,19 +413,35 @@ aChat = (function(_super) {
           'online': true
         };
         buddy.set('resources', resources);
-        if (buddy.get('activeRessource' === Strophe.getResourceFromJid(jid))) {
+        if (buddy.get('activeRessource') === Strophe.getResourceFromJid(jid)) {
           buddy.set('activeRessource', null);
         }
         buddy.trigger('change:resources');
         return true;
       },
       subscription: function(msg) {
-        var jid;
-        if (!msg.getAttribute('type')) {
+        var info, jid, status, type;
+        if (!msg.getAttribute('type') || msg.getAttribute('type') === 'unavailable') {
           return true;
         }
         jid = Strophe.getBareJidFromJid(msg.getAttribute('from'));
-        this.trigger(msg.getAttribute('type'), jid);
+        type = msg.getAttribute('type');
+        status = msg.getElementsByTagName('status');
+        info = this.get('info');
+        if (!info) {
+          info = {};
+        }
+        if (typeof info[jid] !== 'undefined' && info[jid].type === 'subscribe' && type === 'subscribed') {
+          return true;
+        }
+        info[jid] = {
+          type: type
+        };
+        if (status.length) {
+          info[jid].status = Strophe.getText(status[0]);
+        }
+        this.set('info', info);
+        this.trigger('change:info');
         return true;
       },
       general: function(msg) {
@@ -441,6 +493,12 @@ Buddy = (function(_super) {
     this.send = __bind(this.send, this);
 
     this.initView = __bind(this.initView, this);
+
+    this.onThread = __bind(this.onThread, this);
+
+    this.onChatstate = __bind(this.onChatstate, this);
+
+    this.onMessage = __bind(this.onMessage, this);
     return Buddy.__super__.constructor.apply(this, arguments);
   }
 
@@ -451,33 +509,11 @@ Buddy = (function(_super) {
     new ResourceView({
       model: this
     });
-    this.on('message', function(msg, resource) {
-      var msgObj;
-      _this.initView();
-      if (resource) {
-        _this.set('activeResource', resource);
-        console.log('Active Resource switched to ' + resource);
-        if (!_this.get('resources')[resource].online) {
-          _this.set('activeResource', null);
-          console.log('Active Resource switched to null');
-        }
-      }
-      msgObj = _this.get('msg');
-      msgObj[+(new Date)] = msg;
-      _this.set('msg', msgObj);
-      _this.trigger('change:msg', _this);
-      _this.set('state', _this.get('state') | aChat.state.UPDATE);
-      return true;
-    });
-    this.on('chatstate', function(state) {
-      _this.set('state', _this.get('state') & ~(aChat.state.ACTIVE | aChat.state.COMPOSING | aChat.state.PAUSED | aChat.state.INACTIVE | aChat.state.GONE) | aChat.state[state.toUpperCase()]);
-      return true;
-    });
-    this.on('thread', function(thread) {
-      _this.set('thread', thread);
-      _this.collection.main.debug('Thread changed to ' + thread);
-      return trze;
-    });
+    this.on('message', this.onMessage);
+    this.on('chatstate', this.onChatstate);
+    this.on('thread', this.onThread);
+    this.set('msg', {});
+    this.set('groups', []);
     this.on('change:state', function() {
       var d, i, text, _ref;
       text = '';
@@ -498,8 +534,7 @@ Buddy = (function(_super) {
     name: null,
     subscription: null,
     ask: null,
-    groups: [],
-    chatstates: false,
+    groups: null,
     resources: {
       /*
                   ressource1:
@@ -510,7 +545,7 @@ Buddy = (function(_super) {
 
     },
     activeResource: null,
-    msg: {},
+    msg: null,
     state: 0,
     view: false,
     currentChatState: aChat.state.ACTIVE,
@@ -518,6 +553,36 @@ Buddy = (function(_super) {
   };
 
   Buddy.prototype.chatStateTimer = null;
+
+  Buddy.prototype.onMessage = function(msg, resource) {
+    var msgObj;
+    this.initView();
+    if (resource) {
+      this.set('activeResource', resource);
+      console.log('Active Resource switched to ' + resource);
+      if (!this.get('resources')[resource].online) {
+        this.set('activeResource', null);
+        console.log('Active Resource switched to null');
+      }
+    }
+    msgObj = this.get('msg');
+    msgObj[+(new Date)] = msg;
+    this.set('msg', msgObj);
+    this.trigger('change:msg', this);
+    this.set('state', this.get('state') | aChat.state.UPDATE);
+    return true;
+  };
+
+  Buddy.prototype.onChatstate = function(state) {
+    this.set('state', this.get('state') & ~(aChat.state.ACTIVE | aChat.state.COMPOSING | aChat.state.PAUSED | aChat.state.INACTIVE | aChat.state.GONE) | aChat.state[state.toUpperCase()]);
+    return true;
+  };
+
+  Buddy.prototype.onThread = function(thread) {
+    this.set('thread', thread);
+    this.collection.main.debug('Thread changed to ' + thread);
+    return true;
+  };
 
   Buddy.prototype.initView = function() {
     if (!this.get('view')) {
@@ -582,6 +647,9 @@ Buddy = (function(_super) {
     if (state == null) {
       state = aChat.state.ACTIVE;
     }
+    if (!this.collection.main.get('chatstates')) {
+      return;
+    }
     if (state !== this.currentChatState) {
       this.send(null, state);
       this.currentChatState = state;
@@ -641,11 +709,16 @@ Roster = (function(_super) {
 
   Roster.prototype.create = function(buddyData) {
     var buddy, group, id, iq, _i, _len, _ref;
+    if (this.where({
+      jid: buddyData.jid
+    }).length) {
+      return false;
+    }
     this.add(buddy = new Buddy({
       jid: buddyData.jid,
       name: buddyData.name || null,
       subscription: buddyData.subscription || 'none',
-      ask: buddyData.ask || 'subscription',
+      ask: buddyData.ask || 'subscribe',
       groups: buddyData.groups || []
     }));
     iq = $iq({
@@ -664,13 +737,12 @@ Roster = (function(_super) {
       iq.c('group').t(group).up();
     }
     this.main.debug('Add-Buddy - Request');
-    this.collection.main.con.send(iq);
+    this.main.con.send(iq);
     return buddy;
   };
 
-  Roster.prototype.erase = function(buddy) {
-    var id, iq;
-    this.remove(buddy);
+  Roster.prototype.erase = function(jid) {
+    var buddy, id, iq;
     iq = $iq({
       from: this.main.get('jid'),
       type: 'set',
@@ -678,12 +750,15 @@ Roster = (function(_super) {
     }).c('query', {
       xmlns: Strophe.NS.ROSTER
     }).c('item', {
-      jid: buddy.get('jid'),
+      jid: jid,
       subscription: 'remove'
     });
-    this.main.debug('Remove-Buddy - Request');
-    this.collection.main.con.send(iq);
+    this.remove(buddy = this.where({
+      jid: jid
+    })[0]);
     buddy = null;
+    this.main.debug('Remove-Buddy - Request');
+    this.main.con.send(iq);
     return this;
   };
 
@@ -758,7 +833,6 @@ RosterBuddyView = (function(_super) {
   RosterBuddyView.prototype.render = function() {
     var template;
     this.model.collection.main.debug('render RosterBuddyView');
-    _.templateSettings.variable = 'a';
     template = this.model.get('name') || this.model.get('jid').split('@')[0];
     this.$el.html(template);
     return true;
@@ -789,19 +863,78 @@ aChatView = (function(_super) {
   _.extend(aChatView, Backbone.Events);
 
   aChatView.prototype.initialize = function() {
-    this.listenTo(this.model, 'subscribe subscribed unsubscribe unsubscribed', this.info);
+    this.listenTo(this.model, 'change:info', this.info);
     return this.render();
   };
 
   aChatView.prototype.events = {
     'change select[name="presenceShow"]': 'onChangePresenceShow',
     'keydown input[name="presenceStatus"]': 'onKeyDownPresenceStatus',
-    'mousedown .aChatView': 'onMouseDown'
+    'mousedown .aChatView': 'onMouseDown',
+    'click .aChatView_infoNotifications a': 'onClickInfoNotification'
   };
 
   aChatView.prototype.dragdiff = null;
 
-  aChatView.prototype.info = function(jid) {};
+  aChatView.prototype.info = function() {
+    var buddy, html, jid, subscribe, ul, _ref;
+    this.model.debug('Info arrived');
+    ul = this.$el.find('.aChatView_infoNotifications');
+    if (!this.model.get('info')) {
+      ul.hide();
+      return true;
+    }
+    ul.html('');
+    this.model.debug(this.model.get('info'));
+    _ref = this.model.get('info');
+    for (jid in _ref) {
+      buddy = _ref[jid];
+      if (buddy.shown === true) {
+        continue;
+      }
+      this.model.debug('not shown');
+      html = '<a href="#">' + jid + '</a>';
+      switch (buddy.type) {
+        case 'subscribe':
+          html += ' requested authorization';
+          break;
+        case 'subscribed':
+          html += ' approved your authorization';
+          break;
+        case 'unsubscribe':
+          html += ' removed your authorization';
+          break;
+        case 'unsubscribed':
+          subscribe = this.model.roster.where({
+            jid: jid
+          });
+          this.model.debug(subscribe);
+          if (subscribe.length) {
+            html += ' declined your authorization';
+          } else {
+            continue;
+          }
+      }
+      ul.append($('<li>').append(html));
+    }
+    ul.show();
+    return true;
+  };
+
+  aChatView.prototype.onClickInfoNotification = function(e) {
+    var info, jid;
+    e = $.event.fix(e);
+    jid = $(e.target).html();
+    info = this.model.get('info');
+    info[jid].shown = true;
+    this.model.set('info', info);
+    this.model.views.push(new InfoView({
+      model: this.model,
+      jid: jid
+    }));
+    this.model.trigger('change:info');
+    return false;
+  };
 
   aChatView.prototype.render = function() {
     var template;
@@ -811,7 +944,8 @@ aChatView = (function(_super) {
       collection: this.model.roster,
       el: template.find('.RosterView')
     }));
-    return this.$el.html(template).appendTo('body');
+    this.$el.html(template).appendTo('body');
+    return this;
   };
 
   aChatView.prototype.onChangePresenceShow = function() {
@@ -820,18 +954,31 @@ aChatView = (function(_super) {
     this.model.set('show', show);
     switch (show) {
       case 'online':
-        return this.model.connect();
-      case 'offline':
-        return this.model.disconnect();
-      default:
-        obj = {
-          show: show
-        };
-        if (this.model.get('status')) {
-          obj.show = this.model.get('status');
+        if (this.model.get('online')) {
+          obj = {};
+          if (this.model.get('status')) {
+            obj.status = this.model.get('status');
+          }
+          this.model.con.send($pres(obj).c('c', this.model.con.caps.generateCapsAttrs()));
+        } else {
+          this.model.connect();
         }
-        return this.model.con.send($pres(obj).c('c', this.model.con.caps.generateCapsAttrs()));
+        break;
+      case 'offline':
+        this.model.disconnect();
+        break;
+      default:
+        if (this.model.get('online')) {
+          obj = {
+            show: show
+          };
+          if (this.model.get('status')) {
+            obj.show = this.model.get('status');
+          }
+          this.model.con.send($pres(obj).c('c', this.model.con.caps.generateCapsAttrs()));
+        }
     }
+    return true;
   };
 
   aChatView.prototype.onKeyDownPresenceStatus = function(e) {
@@ -846,8 +993,9 @@ aChatView = (function(_super) {
       if (this.model.get('show')) {
         obj.show = this.model.get('show');
       }
-      return this.model.con.send($pres(obj).c('c', this.model.con.caps.generateCapsAttrs()));
+      this.model.con.send($pres(obj).c('c', this.model.con.caps.generateCapsAttrs()));
     }
+    return true;
   };
 
   aChatView.prototype.onMouseDown = function(e) {
@@ -979,7 +1127,7 @@ ChatWindowView = (function(_super) {
     });
     this.$el.html($template);
     if (!this.model.get('view')) {
-      this.$el.appendTo('#aChat');
+      this.$el.appendTo('#' + this.model.collection.main.get('id'));
       this.model.set('view', true);
     }
     return true;
@@ -1099,6 +1247,7 @@ MessageView = (function(_super) {
 
   MessageView.prototype.initialize = function() {
     this.listenTo(this.model, 'change:msg', this.render);
+    this.render();
     return this;
   };
 
@@ -1127,7 +1276,9 @@ StateView = (function(_super) {
   _.extend(StateView, Backbone.Events);
 
   StateView.prototype.initialize = function() {
-    return this.listenTo(this.model, 'change:state', this.render);
+    this.listenTo(this.model, 'change:state', this.render);
+    this.render();
+    return this;
   };
 
   StateView.prototype.render = function() {
@@ -1153,6 +1304,169 @@ StateView = (function(_super) {
 
 })(Backbone.View);
 
+InfoView = (function(_super) {
+
+  __extends(InfoView, _super);
+
+  function InfoView() {
+    this.onMouseMoveHeader = __bind(this.onMouseMoveHeader, this);
+
+    this.onMouseUp = __bind(this.onMouseUp, this);
+
+    this.onMouseDownHeader = __bind(this.onMouseDownHeader, this);
+    return InfoView.__super__.constructor.apply(this, arguments);
+  }
+
+  _.extend(InfoView, Backbone.Events);
+
+  InfoView.prototype.initialize = function(options) {
+    this.jid = options.jid;
+    this.$el.addClass('InfoView');
+    return this.render();
+  };
+
+  InfoView.prototype.events = {
+    'click input[type="button"][name*="close"]': 'onClickClose',
+    'click input[type="button"][name*="subscribe"]': 'onClickSubscribe',
+    'click input[type="button"][name*="subscribed"]': 'onClickSubscribed',
+    'click input[type="button"][name*="unsubscribe"]': 'onClickUnsubscribe',
+    'click input[type="button"][name*="unsubscribed"]': 'onClickUnsubscribed',
+    'click .InfoView_close': 'onClickClose',
+    'mousedown .InfoView_header': 'onMouseDownHeader'
+  };
+
+  InfoView.prototype.dragdiff = null;
+
+  InfoView.prototype.render = function() {
+    var buddy, info, template, templateObj;
+    info = this.model.get('info')[this.jid];
+    this.model.debug(info);
+    templateObj = {
+      jid: this.jid,
+      buttons: []
+    };
+    switch (info.type) {
+      case 'subscribe':
+        templateObj.infoMsg = this.jid + ' requested subscription';
+        templateObj.placeholder = 'Hey ' + this.jid + "!\nI got your request. Please add me, too.";
+        templateObj.buttons.push({
+          value: 'Approve',
+          name: 'subscribed close'
+        });
+        templateObj.buttons.push({
+          value: 'Approve & Subscribe',
+          name: 'subscribed subscribe close'
+        });
+        templateObj.buttons.push({
+          value: 'Decline',
+          name: 'unsubscribed'
+        });
+        break;
+      case 'subscribed':
+        templateObj.infoMsg = this.jid + ' approved your authorization';
+        templateObj.placeholder = false;
+        templateObj.buttons.push({
+          value: 'OK',
+          name: 'close'
+        });
+        break;
+      case 'unsubscribed':
+        buddy = this.model.roster.where({
+          jid: this.jid
+        });
+        templateObj.infoMsg = this.jid + ' declined your authorization';
+        templateObj.placeholder = false;
+        templateObj.buttons.push({
+          value: 'OK',
+          name: 'close'
+        });
+    }
+    if (info.show && info.show !== '') {
+      templateObj.infoMsg += '<br />Message: ' + info.show;
+    }
+    template = _.template($('#InfoView').html(), templateObj);
+    this.$el.html(template);
+    this.$el.appendTo('#' + this.model.get('id'));
+    return this;
+  };
+
+  InfoView.prototype.onClickClose = function() {
+    var info;
+    this.$el.remove();
+    info = this.model.get('info');
+    delete info[this.jid];
+    this.model.set('info', info);
+    this.model.trigger('removeView', this);
+    return false;
+  };
+
+  InfoView.prototype.onClickSubscribe = function() {
+    this.model.subscribe(this.jid, this.$el.find('.InfoView textarea').val());
+    return false;
+  };
+
+  InfoView.prototype.onClickSubscribed = function() {
+    this.model.subscribed(this.jid);
+    return false;
+  };
+
+  InfoView.prototype.onClickUnsubscribe = function() {
+    if ((this.model.roster.where({
+      jid: this.jid
+    }).length)) {
+      this.model.roster.erase(this.jid);
+    } else {
+      this.model.unsubscribe(this.jid);
+    }
+    return false;
+  };
+
+  InfoView.prototype.onClickUnsubscribed = function() {
+    return this.model.unsubscribed(this.jid);
+  };
+
+  InfoView.prototype.onMouseDownHeader = function(e) {
+    var offset;
+    e = $.event.fix(e);
+    $(document).bind('mouseup.aChat', this.onMouseUp);
+    $(document).bind('mousemove.aChat', this.onMouseMoveHeader);
+    offset = this.$el.offset();
+    this.dragdiff = {
+      x: e.pageX - offset.left,
+      y: e.pageY - offset.top
+    };
+    return false;
+  };
+
+  InfoView.prototype.onMouseUp = function(e) {
+    if (this.dragdiff) {
+      this.dragdiff = null;
+    }
+    $(document).unbind('.aChat');
+    if (this.$el.offset().top < 0) {
+      this.$el.css({
+        top: 0
+      });
+    }
+    return false;
+  };
+
+  InfoView.prototype.onMouseMoveHeader = function(e) {
+    if (!this.dragdiff) {
+      return true;
+    }
+    e = $.event.fix(e);
+    this.$el.css({
+      left: e.pageX - this.dragdiff.x,
+      top: e.pageY - this.dragdiff.y
+    });
+    return false;
+  };
+
+  return InfoView;
+
+})(Backbone.View);
+
 ResourceView = (function(_super) {
 
   __extends(ResourceView, _super);
@@ -1173,7 +1487,7 @@ ResourceView = (function(_super) {
   ResourceView.prototype.render = function() {
     var html, i, j, res;
     res = this.model.get('resources');
-    html = 'active-resource: ' + this.model.get('activeResource') + ' -> ';
+    html = 'active-resource: ' + this.model.get('jid') + '/' + this.model.get('activeResource') + ' -> ';
     for (i in res) {
       j = res[i];
       html += i + ': ' + j.show + ' / ' + j.status + ' / ' + j.online + '<br />';

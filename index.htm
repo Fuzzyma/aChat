@@ -30,17 +30,27 @@
     <option value="offline" selected="selected">Offline</option>
    </select>
    <input type="text" name="presenceStatus" placeholder="Write your status here" />
+   <ul class="aChatView_iconSet">
+    
+   </ul>
    <ul class="RosterView"></ul>
+   <ul class="aChatView_infoNotifications"></ul>
   </div>
  </script>
- <script type="text/template" id="RosterView">
-  <div class="RosterView"></div>
+ <script type="text/template" id="InfoView">
+<div class="InfoView_header">
+ <a href="#" class="InfoView_close">X</a>
+ <span class="InfoView_name"><%= a.jid %></span>
+</div>
+<div class="InfoView_infoMsg"><%= a.infoMsg %></div>
+<% if(a.placeholder){ %><textarea class="InfoView_msg"><%= a.placeholder %></textarea><% } %>
+<% _.each(a.buttons, function(m,d) { %><input type="button" value="<%= m.value %>" name="<%= m.name %>" /><% }); %>
  </script>
  <script type="text/javascript" src="lib/jquery-1.9.1.min.js"></script>
  <script type="text/javascript" src="lib/lodash.min.js"></script>
  <script type="text/javascript" src="lib/json2.js"></script>
  <script type="text/javascript" src="lib/backbone.js"></script>
- <script type="text/javascript" src="lib/strophe.min.js"></script>
+ <script type="text/javascript" src="lib/strophe.js"></script>
  <script type="text/javascript" src="lib/plugins/disco/strophe.disco.js"></script>
  <script type="text/javascript" src="lib/plugins/caps/sha1.js"></script>
  <script type="text/javascript" src="lib/plugins/caps/strophe.caps.jsonly.js"></script>

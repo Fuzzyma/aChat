@@ -22,3 +22,5 @@ Last Changes:
 - Added Service Discovery and Entity Capabilities
 - Added Thread-Management
 - Added Resource-Management
+- Added Subscription-Management
+- Added Notifications

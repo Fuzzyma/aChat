@@ -20,6 +20,8 @@ box-shadow:2px 2px 2px #000;
 border-radius:5px;
 border:1px solid rgba(100,100,100,0.5);
 cursor:move;
+top:10px;
+left:10px;
 }
 
 #aChat .aChatView select[name="presenceShow"]{
@@ -118,7 +120,14 @@ filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#e1e1e1', end
 text-shadow:0 0 1px rgba(100,100,100,0.5);
 }
 
-.ChatWindowView{
+#aChat .aChatView .aChatView_infoNotifications{
+display:none;
+line-height:15px;
+font-size:10px;
+cursor:default;
+}
+
+.ChatWindowView, .InfoView{
 min-width:250px;
 /*min-height:331px;*/
 background: #d3db81; /* Old browsers */
@@ -134,9 +143,11 @@ padding:10px 15px;
 border-radius:5px;
 border:1px solid rgba(100,100,100,0.5);
 position:absolute;
+top:10px;
+left:10px;
 }
 
-.ChatWindowView_header{
+.ChatWindowView_header, .InfoView_header{
 height:15px;
 border-radius:5px;
 background: #b7f4c5; /* Old browsers */
@@ -154,12 +165,12 @@ font-size:15px;
 cursor:move;
 }
 
-.ChatWindowView_header:hover .ChatWindowView_close{
+.ChatWindowView_header:hover .ChatWindowView_close, .InfoView_heder:hover .InfoView_close{
 visibility:visible;
 opacity:1;
 }
 
-.ChatWindowView_close{
+.ChatWindowView_close, .InfoView_close{
 float:right;
 display:inline-block;
 width:14px;
@@ -179,7 +190,7 @@ visibility:hidden;
 opacity:0;
 }
 
-.ChatWindowView_close:hover{
+.ChatWindowView_close:hover, .InfoView_close:hover{
 background:rgba(50,50,50,0.5);/*#236632;*/
 color:#000;
 }
@@ -205,7 +216,7 @@ height:15px;
 cursor:row-resize;
 }
 
-.ChatWindowView_msg{
+.ChatWindowView_msg, .InfoView_msg{
 height:50px;
 font-family:helvetica;
 font-size:12px;
@@ -219,4 +230,11 @@ box-sizing:border-box;
 -moz-box-sizing:border-box;
 width:100%;
 min-width:250px;
+}
+
+.InfoView_infoMsg{
+border:1px solid rgba(100,100,100,0.5);
+border-radius:5px;
+padding:10px;
+margin:5px 0;
 }
