@@ -2,7 +2,6 @@
 /*
 Development-Info
 The message stanza can contain a subject-tag. No idea, why a chat should have a subject... its more like a pm then
-Thread-tags are for now not included, too. (http://tools.ietf.org/html/rfc6121#section-5.2.5)
 */
 
 var Buddy, ChatWindowView, InfoView, MessageView, ResourceView, Roster, RosterBuddyView, RosterView, StateView, aChat, aChatView,
@@ -29,6 +28,8 @@ aChat = (function(_super) {
 
     this.requestRoster = __bind(this.requestRoster, this);
 
+    this.addView = __bind(this.addView, this);
+
     this.removeView = __bind(this.removeView, this);
 
     this.initDiscoPlugin = __bind(this.initDiscoPlugin, this);
@@ -37,7 +38,7 @@ aChat = (function(_super) {
 
     this.onDisconnected = __bind(this.onDisconnected, this);
 
-    this.onconnect = __bind(this.onconnect, this);
+    this.onConnect = __bind(this.onConnect, this);
 
     this.disconnect = __bind(this.disconnect, this);
 
@@ -47,25 +48,25 @@ aChat = (function(_super) {
 
   _.extend(aChat, Backbone.Events);
 
+  /*Initialize the Chat
+  */
+
+
   aChat.prototype.initialize = function() {
     this.views = [];
     this.roster = new Roster(null, this);
+    this.initViews();
     Strophe.addNamespace('CHATSTATES', 'http://jabber.org/protocol/chatstates');
     if (this.get('login')) {
       this.connect();
+      this.trigger('connect');
     }
-    if (this.get('debug')) {
-      this.initDebug();
-    }
-    this.initViews();
-    if (this.get('login')) {
-      $('#' + this.get('id') + ' select[name="presenceShow"] option[value="offline"]').removeAttr('selected');
-    }
+    this.on('addView', this.addView);
     this.on('removeView', this.removeView);
     return this;
   };
 
-  aChat.VERSION = '15.02.2013';
+  aChat.VERSION = '18.02.2013';
 
   aChat.prototype.defaults = {
     jid: null,
@@ -79,7 +80,8 @@ aChat = (function(_super) {
     online: false,
     status: null,
     show: null,
-    info: null
+    info: null,
+    id: 'aChat'
   };
 
   aChat.prototype.con = null;
@@ -102,19 +104,24 @@ aChat = (function(_super) {
     GONE: 1 << 8
   };
 
+  /*Creates a new Connection-Object and create a new Session or attachs to it
+  */
+
+
   aChat.prototype.connect = function() {
     if (this.get('online')) {
       return this;
     }
+    this.set('online', true);
     this.con = new Strophe.Connection(this.get('httpbind'));
-    this.initDiscoPlugin();
     if (this.get('jid') && this.get('sid') && this.get('rid')) {
-      this.con.attach(this.get('jid'), this.get('sid'), this.get('rid'), this.onconnect);
+      this.con.attach(this.get('jid'), this.get('sid'), this.get('rid'), this.onConnect);
       this.debug("Attach to session with jid: " + (this.get('jid')) + ", sid: " + (this.get('sid')) + ", rid: " + (this.get('rid')));
     } else if (this.get('jid') && this.get('pw')) {
-      this.con.connect(this.get('jid'), this.get('pw'), this.onconnect);
+      this.con.connect(this.get('jid'), this.get('pw'), this.onConnect);
       this.debug("Connect to server with jid: " + (this.get('jid')) + ", pw: " + (this.get('pw')));
     }
+    this.initDiscoPlugin();
     return this;
   };
 
@@ -126,11 +133,11 @@ aChat = (function(_super) {
     if (this.loginTimeout) {
       clearTimeout(this.loginTimeout);
     }
-    this.con.disconnect('offline');
+    this.con.disconnect('Offline');
     return this;
   };
 
-  aChat.prototype.onconnect = function(status, error) {
+  aChat.prototype.onConnect = function(status, error) {
     var _this = this;
     switch (status) {
       case Strophe.Status.ERROR:
@@ -161,11 +168,12 @@ aChat = (function(_super) {
       case Strophe.Status.ATTACHED:
       case Strophe.Status.CONNECTED:
         this.debug('Verbunden');
-        this.set('online', true);
-        this.con.addHandler((function(msg) {
-          _this.debug(msg);
-          return true;
-        }));
+        if (this.get('debug')) {
+          this.con.addHandler((function(msg) {
+            _this.debug(msg);
+            return true;
+          }));
+        }
         this.con.addHandler(_.bind(this.handle.message.chat, this), null, 'message', 'chat');
         this.con.addHandler(_.bind(this.handle.message.chat, this), null, 'message', 'normal');
         this.con.addHandler(_.bind(this.handle.message.chatstates, this), Strophe.NS.CHATSTATES, 'message');
@@ -182,26 +190,37 @@ aChat = (function(_super) {
     return true;
   };
 
-  aChat.prototype.onDisconnected = function() {};
+  aChat.prototype.onDisconnected = function() {
+    return true;
+  };
 
   aChat.prototype.initViews = function() {
     _.templateSettings.variable = 'a';
-    return this.views.push(new aChatView({
+    this.trigger('addView', new aChatView({
       model: this,
       id: this.get('id')
     }));
+    return this;
   };
 
   aChat.prototype.initDiscoPlugin = function() {
-    this.con.disco.addIdentity('client', 'web', 'aChat', '');
+    this.con.disco.addIdentity('client', 'web', 'aChat ' + aChat.VERSION, '');
     this.con.disco.addFeature(Strophe.NS.CHATSTATES);
-    return this.con.caps.node = 'https://github.com/Fuzzyma/aChat';
+    this.con.caps.node = 'https://github.com/Fuzzyma/aChat';
+    return this;
   };
 
   aChat.prototype.removeView = function(view) {
     var i;
     i = _.indexOf(this.views, view);
-    return this.views[i] = null;
+    this.views[i].remove();
+    this.views[i] = null;
+    return this;
+  };
+
+  aChat.prototype.addView = function(view) {
+    this.views.push(view);
+    return this;
   };
 
   aChat.prototype.requestRoster = function() {
@@ -220,7 +239,6 @@ aChat = (function(_super) {
 
   aChat.prototype.initRoster = function(msg) {
     var buddy, _i, _len, _ref;
-    this.debug('Roster arrived');
     this.roster.reset();
     _ref = msg.getElementsByTagName('item');
     for (_i = 0, _len = _ref.length; _i < _len; _i++) {
@@ -234,9 +252,6 @@ aChat = (function(_super) {
       }));
     }
     this.debug('Sending initial Presence!');
-    this.debug($pres({
-      from: this.get('jid')
-    }).c('c', this.con.caps.generateCapsAttrs()).tree());
     this.con.send($pres({
       from: this.get('jid')
     }).c('c', this.con.caps.generateCapsAttrs()));
@@ -255,7 +270,7 @@ aChat = (function(_super) {
     if (msg == null) {
       msg = '';
     }
-    this.roster.create({
+    this.roster.createNew({
       jid: jid
     });
     this.con.send($pres({
@@ -263,6 +278,7 @@ aChat = (function(_super) {
       type: 'subscribe',
       id: this.con.getUniqueId()
     }).c('status').t(msg).up().c('c', this.con.caps.generateCapsAttrs()));
+    return this;
   };
 
   aChat.prototype.subscribed = function(jid, msg) {
@@ -274,6 +290,7 @@ aChat = (function(_super) {
       type: 'subscribed',
       id: this.con.getUniqueId()
     }).c('status').t(msg).up().c('c', this.con.caps.generateCapsAttrs()));
+    return this;
   };
 
   aChat.prototype.unsubscribe = function(jid, msg) {
@@ -285,6 +302,7 @@ aChat = (function(_super) {
       type: 'unsubscribe',
       id: this.con.getUniqueId()
     }).c('status').t(msg).up().c('c', this.con.caps.generateCapsAttrs()));
+    return this;
   };
 
   aChat.prototype.unsubscribed = function(jid, msg) {
@@ -296,6 +314,7 @@ aChat = (function(_super) {
       type: 'unsubscribed',
       id: this.con.getUniqueId()
     }).c('status').t(msg).up().c('c', this.con.caps.generateCapsAttrs()));
+    return this;
   };
 
   aChat.prototype.handle = {
@@ -304,21 +323,21 @@ aChat = (function(_super) {
         var body, buddy, jid;
         jid = msg.getAttribute('from');
         buddy = this.roster.where({
-          jid: Strophe.xmlescape(Strophe.getBareJidFromJid(jid))
+          jid: Strophe.getBareJidFromJid(jid)
         })[0];
         if (!buddy) {
           return true;
         }
         body = msg.getElementsByTagName('body')[0];
         if (body) {
-          buddy.trigger('message', Strophe.xmlescape(Strophe.getText(body)), Strophe.getResourceFromJid(jid));
+          buddy.trigger('message', Strophe.getText(body), Strophe.getResourceFromJid(jid));
         }
         return true;
       },
       chatstates: function(msg) {
         var buddy, state;
         buddy = this.roster.where({
-          jid: Strophe.xmlescape(Strophe.getBareJidFromJid(msg.getAttribute('from')))
+          jid: Strophe.getBareJidFromJid(msg.getAttribute('from'))
         })[0];
         if (!buddy) {
           return true;
@@ -340,7 +359,6 @@ aChat = (function(_super) {
           return true;
         }
         buddy.trigger('thread', Strophe.getText(thread[0]));
-        this.debug('thread triggered');
         return true;
       }
     },
@@ -410,7 +428,7 @@ aChat = (function(_super) {
         resources[Strophe.getResourceFromJid(jid)] = {
           'show': null,
           'status': Strophe.getText(msg.getElementsByTagName('status')[0]) || null,
-          'online': true
+          'online': false
         };
         buddy.set('resources', resources);
         if (buddy.get('activeRessource') === Strophe.getResourceFromJid(jid)) {
@@ -469,8 +487,6 @@ aChat = (function(_super) {
     }
   };
 
-  aChat.prototype.initDebug = function() {};
-
   aChat.prototype.debug = function(msg) {
     if (this.get('debug')) {
       return console.log(msg);
@@ -480,6 +496,12 @@ aChat = (function(_super) {
   return aChat;
 
 })(Backbone.Model);
+
+/*
+This Model represents one special Buddy.
+It manages messages, chatsstates and threads of this buddy.
+*/
+
 
 Buddy = (function(_super) {
 
@@ -560,7 +582,7 @@ Buddy = (function(_super) {
     if (resource) {
       this.set('activeResource', resource);
       console.log('Active Resource switched to ' + resource);
-      if (!this.get('resources')[resource].online) {
+      if (typeof this.get('resources')[resource] !== 'undefined' && this.get('resources')[resource].online) {
         this.set('activeResource', null);
         console.log('Active Resource switched to null');
       }
@@ -586,7 +608,8 @@ Buddy = (function(_super) {
 
   Buddy.prototype.initView = function() {
     if (!this.get('view')) {
-      this.collection.main.views.push(new ChatWindowView({
+      this.set('view', true);
+      this.collection.main.trigger('addView', new ChatWindowView({
         model: this
       }));
       return this.set('state', this.get('state') | aChat.state.OPEN);
@@ -632,7 +655,7 @@ Buddy = (function(_super) {
     if (msg !== '') {
       this.trigger('message', msg);
     }
-    this.collection.main.con.send(XMLmsg);
+    this.collection.main.con.send(XMLmsg.tree());
     this.collection.main.debug(XMLmsg);
     return true;
   };
@@ -688,6 +711,13 @@ Buddy = (function(_super) {
 
 })(Backbone.Model);
 
+/*
+This collection contains all Buddy-Models.
+It can create new Buddys or erase Buddys
+from ther server roster
+*/
+
+
 Roster = (function(_super) {
 
   __extends(Roster, _super);
@@ -695,7 +725,9 @@ Roster = (function(_super) {
   function Roster() {
     this.erase = __bind(this.erase, this);
 
-    this.create = __bind(this.create, this);
+    this.createNew = __bind(this.createNew, this);
+
+    this.destroyModels = __bind(this.destroyModels, this);
     return Roster.__super__.constructor.apply(this, arguments);
   }
 
@@ -705,9 +737,21 @@ Roster = (function(_super) {
 
   Roster.prototype.initialize = function(col, main) {
     this.main = main;
+    return this.on('reset', this.destroyModels);
   };
 
-  Roster.prototype.create = function(buddyData) {
+  Roster.prototype.destroyModels = function(a, oldModels) {
+    var model, _i, _len, _results;
+    _results = [];
+    for (_i = 0, _len = oldModels.length; _i < _len; _i++) {
+      model = oldModels[_i];
+      model.destroy();
+      _results.push(model = null);
+    }
+    return _results;
+  };
+
+  Roster.prototype.createNew = function(buddyData) {
     var buddy, group, id, iq, _i, _len, _ref;
     if (this.where({
       jid: buddyData.jid
@@ -928,7 +972,7 @@ aChatView = (function(_super) {
     info = this.model.get('info');
     info[jid].shown = true;
     this.model.set('info', info);
-    this.model.views.push(new InfoView({
+    this.model.trigger('addView', new InfoView({
       model: this.model,
       jid: jid
     }));
@@ -940,7 +984,7 @@ aChatView = (function(_super) {
     var template;
     this.model.debug('render aChatView');
     template = $($.trim($("#aChatView").html()));
-    this.model.views.push(new RosterView({
+    this.model.trigger('addView', new RosterView({
       collection: this.model.roster,
       el: template.find('.RosterView')
     }));
@@ -1126,15 +1170,11 @@ ChatWindowView = (function(_super) {
       model: this.model
     });
     this.$el.html($template);
-    if (!this.model.get('view')) {
-      this.$el.appendTo('#' + this.model.collection.main.get('id'));
-      this.model.set('view', true);
-    }
+    this.$el.appendTo('#' + this.model.collection.main.get('id'));
     return true;
   };
 
   ChatWindowView.prototype.close = function() {
-    this.$el.remove();
     this.model.set('view', false);
     this.model.collection.main.trigger('removeView', this);
     return false;
@@ -1392,7 +1432,6 @@ InfoView = (function(_super) {
 
   InfoView.prototype.onClickClose = function() {
     var info;
-    this.$el.remove();
     info = this.model.get('info');
     delete info[this.jid];
     this.model.set('info', info);
@@ -1503,7 +1542,7 @@ $(function() {
   var a;
   return a = new aChat({
     jid: 'admin@localhost',
-    pw: 'tree',
+    pw: '-.-um2591',
     debug: true,
     id: 'aChat'
   });
