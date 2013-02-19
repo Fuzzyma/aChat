@@ -48,18 +48,14 @@ aChat = (function(_super) {
 
   _.extend(aChat, Backbone.Events);
 
-  /*Initialize the Chat
-  */
-
-
   aChat.prototype.initialize = function() {
+    Backbone.sync = function() {};
     this.views = [];
     this.roster = new Roster(null, this);
     this.initViews();
     Strophe.addNamespace('CHATSTATES', 'http://jabber.org/protocol/chatstates');
     if (this.get('login')) {
       this.connect();
-      this.trigger('connect');
     }
     this.on('addView', this.addView);
     this.on('removeView', this.removeView);
@@ -103,10 +99,6 @@ aChat = (function(_super) {
     INACTIVE: 1 << 7,
     GONE: 1 << 8
   };
-
-  /*Creates a new Connection-Object and create a new Session or attachs to it
-  */
-
 
   aChat.prototype.connect = function() {
     if (this.get('online')) {
@@ -191,6 +183,12 @@ aChat = (function(_super) {
   };
 
   aChat.prototype.onDisconnected = function() {
+    var i, _i, _len, _ref;
+    _ref = this.views;
+    for (_i = 0, _len = _ref.length; _i < _len; _i++) {
+      i = _ref[_i];
+      this.trigger('removeView', i);
+    }
     return true;
   };
 
@@ -212,6 +210,8 @@ aChat = (function(_super) {
 
   aChat.prototype.removeView = function(view) {
     var i;
+    this.debug('view removed');
+    this.debug(view);
     i = _.indexOf(this.views, view);
     this.views[i].remove();
     this.views[i] = null;
@@ -219,6 +219,8 @@ aChat = (function(_super) {
   };
 
   aChat.prototype.addView = function(view) {
+    this.debug('view added');
+    this.debug(view);
     this.views.push(view);
     return this;
   };
@@ -243,13 +245,13 @@ aChat = (function(_super) {
     _ref = msg.getElementsByTagName('item');
     for (_i = 0, _len = _ref.length; _i < _len; _i++) {
       buddy = _ref[_i];
-      this.roster.add(new Buddy({
+      this.roster.create({
         jid: Strophe.getBareJidFromJid(buddy.getAttribute('jid')),
         name: buddy.getAttribute('name'),
         subscription: buddy.getAttribute('subscription'),
         ask: buddy.getAttribute('ask'),
         groups: buddy.getElementsByTagName('group')
-      }));
+      });
     }
     this.debug('Sending initial Presence!');
     this.con.send($pres({
@@ -399,13 +401,13 @@ aChat = (function(_super) {
                   groups: buddy.getElementsByTagName('group')
                 });
               } else {
-                this.roster.add(new Buddy({
+                this.roster.create({
                   jid: Strophe.getBareJidFromJid(buddy.getAttribute('jid')),
                   name: buddy.getAttribute('name'),
                   subscription: buddy.getAttribute('subscription'),
                   ask: buddy.getAttribute('ask'),
                   groups: buddy.getElementsByTagName('group')
-                }));
+                });
               }
             }
             this.sendResult(msg);
@@ -758,13 +760,13 @@ Roster = (function(_super) {
     }).length) {
       return false;
     }
-    this.add(buddy = new Buddy({
+    buddy = this.create({
       jid: buddyData.jid,
       name: buddyData.name || null,
       subscription: buddyData.subscription || 'none',
       ask: buddyData.ask || 'subscribe',
       groups: buddyData.groups || []
-    }));
+    });
     iq = $iq({
       from: this.main.get('jid'),
       type: 'set',
@@ -815,6 +817,8 @@ RosterView = (function(_super) {
   __extends(RosterView, _super);
 
   function RosterView() {
+    this.remove = __bind(this.remove, this);
+
     this.render = __bind(this.render, this);
     return RosterView.__super__.constructor.apply(this, arguments);
   }
@@ -822,13 +826,15 @@ RosterView = (function(_super) {
   _.extend(RosterView, Backbone.Events);
 
   RosterView.prototype.initialize = function() {
+    this.views = [];
     this.listenTo(this.collection, 'add remove', this.render);
-    this.listenTo(this.collection.main, 'change:online', this.toggleOnline);
     if (this.collection) {
       this.render();
     }
     return this;
   };
+
+  RosterView.prototype.views = null;
 
   RosterView.prototype.render = function() {
     var buddy, _i, _len, _ref;
@@ -837,15 +843,26 @@ RosterView = (function(_super) {
     _ref = this.collection.models;
     for (_i = 0, _len = _ref.length; _i < _len; _i++) {
       buddy = _ref[_i];
-      new RosterBuddyView({
+      this.views.push(new RosterBuddyView({
         model: buddy,
         el: $('<li>').appendTo(this.$el)
-      });
+      }));
     }
-    return true;
+    return this;
   };
 
-  RosterView.prototype.toggleOnline = function(e) {};
+  RosterView.prototype.remove = function() {
+    var i, _i, _len, _ref;
+    _ref = this.views;
+    for (_i = 0, _len = _ref.length; _i < _len; _i++) {
+      i = _ref[_i];
+      i.remove();
+      i = null;
+    }
+    this.$el.html('');
+    this.stopListening();
+    return this;
+  };
 
   return RosterView;
 
@@ -879,7 +896,7 @@ RosterBuddyView = (function(_super) {
     this.model.collection.main.debug('render RosterBuddyView');
     template = this.model.get('name') || this.model.get('jid').split('@')[0];
     this.$el.html(template);
-    return true;
+    return this;
   };
 
   RosterBuddyView.prototype.onDblClickBuddy = function() {
@@ -901,6 +918,10 @@ aChatView = (function(_super) {
     this.onMouseUp = __bind(this.onMouseUp, this);
 
     this.onMouseDown = __bind(this.onMouseDown, this);
+
+    this.remove = __bind(this.remove, this);
+
+    this.changeOnline = __bind(this.changeOnline, this);
     return aChatView.__super__.constructor.apply(this, arguments);
   }
 
@@ -908,6 +929,7 @@ aChatView = (function(_super) {
 
   aChatView.prototype.initialize = function() {
     this.listenTo(this.model, 'change:info', this.info);
+    this.listenTo(this.model, 'change:online', this.changeOnline);
     return this.render();
   };
 
@@ -936,7 +958,6 @@ aChatView = (function(_super) {
       if (buddy.shown === true) {
         continue;
       }
-      this.model.debug('not shown');
       html = '<a href="#">' + jid + '</a>';
       switch (buddy.type) {
         case 'subscribe':
@@ -962,7 +983,29 @@ aChatView = (function(_super) {
       ul.append($('<li>').append(html));
     }
     ul.show();
-    return true;
+    return this;
+  };
+
+  aChatView.prototype.changeOnline = function() {
+    var status;
+    status = 'offline';
+    if (this.model.get('online')) {
+      status = 'online';
+    }
+    this.$el.find('select[name="presenceShow"]').val(status);
+    return this;
+  };
+
+  aChatView.prototype.remove = function(confirm) {
+    if (confirm == null) {
+      confirm = false;
+    }
+    if (!confirm) {
+      return this;
+    }
+    this.$el.remove();
+    this.stopListening();
+    return this;
   };
 
   aChatView.prototype.onClickInfoNotification = function(e) {
@@ -1017,7 +1060,7 @@ aChatView = (function(_super) {
             show: show
           };
           if (this.model.get('status')) {
-            obj.show = this.model.get('status');
+            obj.status = this.model.get('status');
           }
           this.model.con.send($pres(obj).c('c', this.model.con.caps.generateCapsAttrs()));
         }
@@ -1110,6 +1153,8 @@ ChatWindowView = (function(_super) {
 
     this.close = __bind(this.close, this);
 
+    this.remove = __bind(this.remove, this);
+
     this.render = __bind(this.render, this);
 
     this.handleState = __bind(this.handleState, this);
@@ -1119,9 +1164,11 @@ ChatWindowView = (function(_super) {
   _.extend(ChatWindowView, Backbone.Events);
 
   ChatWindowView.prototype.initialize = function() {
+    this.views = [];
     this.listenTo(this.model, 'change:state', this.handleState);
     this.$el.addClass('ChatWindowView');
-    return this.render();
+    this.render();
+    return this;
   };
 
   ChatWindowView.prototype.events = {
@@ -1132,6 +1179,8 @@ ChatWindowView = (function(_super) {
   };
 
   ChatWindowView.prototype.dragdiff = null;
+
+  ChatWindowView.prototype.views = null;
 
   ChatWindowView.prototype.handleState = function() {
     var state;
@@ -1161,17 +1210,29 @@ ChatWindowView = (function(_super) {
     $template = $(_.template($.trim($("#ChatWindowView").html()), {
       jid: this.model.get('jid')
     }));
-    new MessageView({
+    this.views.push = new MessageView({
       el: $template.filter('.ChatWindowView_chat'),
       model: this.model
     });
-    new StateView({
+    this.views.push = new StateView({
       el: $template.filter('.ChatWindowView_state'),
       model: this.model
     });
     this.$el.html($template);
     this.$el.appendTo('#' + this.model.collection.main.get('id'));
-    return true;
+    return this;
+  };
+
+  ChatWindowView.prototype.remove = function() {
+    var i, _i, _len, _ref;
+    _ref = this.views;
+    for (_i = 0, _len = _ref.length; _i < _len; _i++) {
+      i = _ref[_i];
+      i.remove();
+    }
+    this.$el.remove();
+    this.stopListening();
+    return this;
   };
 
   ChatWindowView.prototype.close = function() {
@@ -1202,8 +1263,9 @@ ChatWindowView = (function(_super) {
       }
       this.model.send(e.target.value);
       e.target.value = '';
-      return false;
+      false;
     }
+    return true;
   };
 
   ChatWindowView.prototype.onMouseDownHeader = function(e) {
@@ -1362,7 +1424,8 @@ InfoView = (function(_super) {
   InfoView.prototype.initialize = function(options) {
     this.jid = options.jid;
     this.$el.addClass('InfoView');
-    return this.render();
+    this.render();
+    return this;
   };
 
   InfoView.prototype.events = {
@@ -1427,6 +1490,12 @@ InfoView = (function(_super) {
     template = _.template($('#InfoView').html(), templateObj);
     this.$el.html(template);
     this.$el.appendTo('#' + this.model.get('id'));
+    return this;
+  };
+
+  InfoView.prototype.remove = function() {
+    this.$el.html('');
+    this.stopListening();
     return this;
   };
 
@@ -1520,7 +1589,8 @@ ResourceView = (function(_super) {
   ResourceView.prototype.initialize = function() {
     this.listenTo(this.model, 'change:resources', this.render);
     this.listenTo(this.model, 'change:msg', this.render);
-    return this.$el.appendTo('body');
+    this.$el.appendTo('body');
+    return this;
   };
 
   ResourceView.prototype.render = function() {
@@ -1542,7 +1612,8 @@ $(function() {
   var a;
   return a = new aChat({
     jid: 'admin@localhost',
-    pw: '-.-um2591',
+    pw: 'tree',
+    login: true,
     debug: true,
     id: 'aChat'
   });
