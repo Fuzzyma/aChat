@@ -51,14 +51,14 @@ aChat = (function(_super) {
   aChat.prototype.initialize = function() {
     Backbone.sync = function() {};
     this.views = [];
+    this.on('addView', this.addView);
+    this.on('removeView', this.removeView);
     this.roster = new Roster(null, this);
     this.initViews();
     Strophe.addNamespace('CHATSTATES', 'http://jabber.org/protocol/chatstates');
     if (this.get('login')) {
       this.connect();
     }
-    this.on('addView', this.addView);
-    this.on('removeView', this.removeView);
     return this;
   };
 
@@ -211,18 +211,31 @@ aChat = (function(_super) {
   aChat.prototype.removeView = function(view) {
     var i;
     this.debug('view removed');
-    this.debug(view);
     i = _.indexOf(this.views, view);
-    this.views[i].remove();
-    this.views[i] = null;
+    if (this.views[i].remove()) {
+      this.views[i] = null;
+      this.views = this.views.slice(0, i).concat(this.views.slice(i + 1));
+    }
+    this.printViews();
     return this;
   };
 
   aChat.prototype.addView = function(view) {
     this.debug('view added');
-    this.debug(view);
     this.views.push(view);
+    this.printViews();
     return this;
+  };
+
+  aChat.prototype.printViews = function() {
+    var i, _i, _len, _ref, _results;
+    _ref = this.views;
+    _results = [];
+    for (_i = 0, _len = _ref.length; _i < _len; _i++) {
+      i = _ref[_i];
+      _results.push(this.debug(i));
+    }
+    return _results;
   };
 
   aChat.prototype.requestRoster = function() {
@@ -851,13 +864,19 @@ RosterView = (function(_super) {
     return this;
   };
 
-  RosterView.prototype.remove = function() {
+  RosterView.prototype.remove = function(confirm) {
     var i, _i, _len, _ref;
+    if (confirm == null) {
+      confirm = false;
+    }
     _ref = this.views;
     for (_i = 0, _len = _ref.length; _i < _len; _i++) {
       i = _ref[_i];
       i.remove();
       i = null;
+    }
+    if (!confirm) {
+      return false;
     }
     this.$el.html('');
     this.stopListening();
@@ -1001,7 +1020,7 @@ aChatView = (function(_super) {
       confirm = false;
     }
     if (!confirm) {
-      return this;
+      return false;
     }
     this.$el.remove();
     this.stopListening();

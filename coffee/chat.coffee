@@ -13,18 +13,23 @@ class aChat extends Backbone.Model
     initialize: ->
         Backbone.sync = ->
         @views = []
-        @roster = new Roster null, @
-        @initViews()
         
+        # Since the aChat model stores all main-views, we have events for this
+        # This listeners have to stay first cause Events are firing since now
+        @on 'addView', @addView
+        @on 'removeView', @removeView
+        
+        # Creating the roster for the chat
+        @roster = new Roster null, @
+
+        @initViews()
+
         Strophe.addNamespace 'CHATSTATES', 'http://jabber.org/protocol/chatstates'
         
         # If autologin: connect
         if @.get('login')
             @connect() 
-        
-        # Since the aChat model stores all main-views, we have events for this
-        @on 'addView', @addView
-        @on 'removeView', @removeView
+
         this
 
     # Public Properties
@@ -155,7 +160,6 @@ class aChat extends Backbone.Model
     initViews: =>
         #Sets the lodash-templatevariable to a for easier template-writing
         _.templateSettings.variable = 'a'
-        
         #Create the View for the Chat (this view includes the roster and other views)
         @trigger 'addView', new aChatView(model:@,id:@get('id'))
         @
@@ -170,18 +174,23 @@ class aChat extends Backbone.Model
     # Removes the given View
     removeView: (view) =>
         @debug 'view removed'
-        @debug view
         i = _.indexOf(@views, view) 
-        @views[i].remove()
-        @views[i] = null
+        if(@views[i].remove())
+            @views[i] = null
+            @views = @views.slice(0,i).concat @views.slice(i+1)
+        @printViews()
         @
     
     # Adds the given View
     addView: (view) =>
         @debug 'view added'
-        @debug view
         @views.push view
+        @printViews()
         @
+    
+    printViews: ->
+        for i in @views
+            @debug i
     
     # Requests the Roster from the server sending an iq-stanza of type 'get'
     requestRoster: =>
@@ -684,10 +693,11 @@ class RosterView extends Backbone.View
                 el:$('<li>').appendTo(@$el)
         @
         
-    remove: =>
+    remove: (confirm = false) =>
         for i in @views
             i.remove()
             i = null
+        return false if not confirm
         @$el.html('')
         @stopListening()
         @
@@ -769,7 +779,7 @@ class aChatView extends Backbone.View
         @
         
     remove: (confirm = false) =>
-        return @ if !confirm
+        return false if !confirm
         @$el.remove()
         @stopListening()
         @
@@ -788,7 +798,6 @@ class aChatView extends Backbone.View
         @model.debug 'render aChatView'
         template = $($.trim($("#aChatView").html()))
         @model.trigger 'addView', new RosterView(
-        #@model.views.push new RosterView(
             collection:@model.roster
             el:template.find('.RosterView')
         )
